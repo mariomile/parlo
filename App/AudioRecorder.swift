@@ -4,8 +4,14 @@ import Synchronization
 
 enum RecorderError: LocalizedError {
     case noMicrophone
+    case unsupportedFormat
 
-    var errorDescription: String? { "No microphone available" }
+    var errorDescription: String? {
+        switch self {
+        case .noMicrophone: "No microphone available"
+        case .unsupportedFormat: "This microphone's audio format isn't supported"
+        }
+    }
 }
 
 /// Thread-safe sample accumulator written from the audio thread.
@@ -44,13 +50,34 @@ final class AudioRecorder {
     )!
 
     private var engine: AVAudioEngine?
+    private var deviceUID: String?
+    private var configObserver: NSObjectProtocol?
     private let sink = SampleSink()
+    private var isRecording = false
 
     /// RMS of the latest buffer, 0...~1.
     var level: Float { sink.level }
 
+    /// Called when the microphone stopped mid-recording and could not be restarted.
+    var onFailure: (String) -> Void = { _ in }
+
     func start(deviceUID: String?) throws {
         _ = stop()
+        sink.reset()
+        self.deviceUID = deviceUID
+        try startEngine()
+        isRecording = true
+    }
+
+    /// Stops capture and returns everything recorded since `start`, even if the engine already died.
+    func stop() -> [Float] {
+        isRecording = false
+        if let engine { teardown(engine) }
+        return sink.drain()
+    }
+
+    /// Builds a fresh engine that appends to the current recording.
+    private func startEngine() throws {
         let engine = AVAudioEngine()
         let input = engine.inputNode
         if let deviceUID, let deviceID = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
@@ -60,28 +87,48 @@ final class AudioRecorder {
         }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw RecorderError.noMicrophone }
-        sink.reset()
-        input.installTap(onBus: 0, bufferSize: 2048, format: format, block: Self.makeTap(from: format, sink: sink))
+        guard let converter = AVAudioConverter(from: format, to: Self.targetFormat) else {
+            throw RecorderError.unsupportedFormat
+        }
+        input.installTap(onBus: 0, bufferSize: 2048, format: format,
+                         block: Self.makeTap(converter: converter, ratio: Self.targetFormat.sampleRate / format.sampleRate, sink: sink))
         engine.prepare()
         try engine.start()
         self.engine = engine
+        // AirPods switching profile, a mic plugged in, or another app taking the device stops the engine
+        // silently. Restart on the new configuration and keep what was already captured.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restart() }
+        }
     }
 
-    /// Stops capture and returns everything recorded since `start`.
-    func stop() -> [Float] {
-        guard let engine else { return [] }
+    /// A device switch often reports an unusable format first, so try a few times before giving up.
+    private func restart(attempt: Int = 1) {
+        guard isRecording else { return }
+        if let engine { teardown(engine) }
+        do {
+            try startEngine()
+        } catch {
+            guard attempt < 5 else { return onFailure(error.localizedDescription) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                MainActor.assumeIsolated { self?.restart(attempt: attempt + 1) }
+            }
+        }
+    }
+
+    private func teardown(_ engine: AVAudioEngine) {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = nil
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         self.engine = nil
-        return sink.drain()
     }
 
     /// Built outside the main actor: the tap runs on the audio thread.
-    private nonisolated static func makeTap(from format: AVAudioFormat, sink: SampleSink) -> AVAudioNodeTapBlock {
-        let converter = AVAudioConverter(from: format, to: targetFormat)
-        let ratio = targetFormat.sampleRate / format.sampleRate
+    private nonisolated static func makeTap(converter: AVAudioConverter, ratio: Double, sink: SampleSink) -> AVAudioNodeTapBlock {
         return { buffer, _ in
-            guard let converter else { return }
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
             guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
             var supplied = false

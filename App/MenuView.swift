@@ -6,7 +6,6 @@ import SwiftUI
 struct MenuView: View {
     @Bindable var controller: AppController
     @Environment(\.dismiss) private var dismiss
-    @State private var copied = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,9 +18,9 @@ struct MenuView: View {
                 aiRow
             }
             .padding(6)
-            if let last = controller.lastDictation {
+            if !controller.recent.isEmpty {
                 Divider().opacity(0.5)
-                lastDictation(last)
+                recentSection
             }
             Divider().opacity(0.5)
             footer
@@ -118,38 +117,20 @@ struct MenuView: View {
         .padding(.bottom, 4)
     }
 
-    // MARK: Last dictation
+    // MARK: Recent
 
-    private func lastDictation(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("LAST DICTATION")
+    private var recentSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("RECENT")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.6)
                 .foregroundStyle(.tertiary)
-            HStack(alignment: .top, spacing: 8) {
-                Text(text)
-                    .font(.system(size: 12.5))
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                Button {
-                    controller.copyLastDictation()
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.2))
-                        copied = false
-                    }
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 26, height: 26)
-                        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
-                }
-                .buttonStyle(PressableStyle())
-                .help("Copy")
+                .padding(.horizontal, 8)
+            ForEach(controller.recent.prefix(5)) { entry in
+                RecentRow(entry: entry, copy: { controller.copy(entry) }, retry: { controller.retry(entry) })
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 6)
         .padding(.vertical, 10)
     }
 
@@ -164,7 +145,7 @@ struct MenuView: View {
                 dismiss()
             }
             Spacer()
-            FooterButton(title: "Quit", icon: "power") { NSApp.terminate(nil) }
+            FooterButton(title: "Quit", icon: "power") { controller.quit() }
                 .keyboardShortcut("q")
         }
         .padding(6)
@@ -187,6 +168,7 @@ struct MenuView: View {
         if !controller.hotkeyActive || !Permissions.microphone || !Permissions.accessibility {
             return ("Finish setup: permissions missing", nil)
         }
+        if Permissions.globeKeyConflicts { return ("Set “Press 🌐 key to” to Do Nothing", nil) }
         if controller.aiNeedsKey { return ("AI cleanup needs an API key", .ai) }
         if controller.settings.llm.enabled, controller.settings.llm.provider == .apple,
            let reason = AppleIntelligenceClient.unavailableReason {
@@ -235,6 +217,68 @@ private struct Row<Accessory: View>: View {
         .padding(.vertical, 6)
         .background(hovering ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .onHover { hovering = $0 }
+    }
+}
+
+/// One saved dictation: its text, or why there is none, with copy and retry.
+private struct RecentRow: View {
+    let entry: HistoryEntry
+    let copy: () -> Void
+    let retry: () -> Void
+    @State private var copied = false
+    @State private var hovering = false
+
+    private var label: (text: String, dimmed: Bool) {
+        switch entry.status {
+        case .done: (entry.text ?? "", false)
+        case .processing: ("Transcribing…", true)
+        case .nothingHeard: ("Nothing heard", true)
+        case let .failed(reason): ("Failed: \(reason)", true)
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label.text)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(label.dimmed ? .secondary : .primary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                Text(entry.date, format: .dateTime.hour().minute())
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if entry.text != nil {
+                iconButton(copied ? "checkmark" : "doc.on.doc", help: "Copy") {
+                    copy()
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.2))
+                        copied = false
+                    }
+                }
+            }
+            if entry.status != .processing {
+                iconButton("arrow.clockwise", help: "Transcribe again and copy", action: retry)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(hovering ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .onHover { hovering = $0 }
+    }
+
+    private func iconButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 24, height: 24)
+                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(PressableStyle())
+        .help(help)
     }
 }
 
