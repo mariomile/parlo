@@ -24,6 +24,7 @@ import Testing
         s.dictionary = [DictionaryEntry(term: "Claude Code", heardAs: ["cloud code"])]
         s.snippets = [Snippet(trigger: "my address", text: "Via Roma 1")]
         s.hasCompletedOnboarding = true
+        s.microphoneUID = "BuiltInMicrophoneDevice"
         try store.save(s)
         #expect(store.load() == s)
     }

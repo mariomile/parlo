@@ -1,0 +1,409 @@
+import AppKit
+import ParloCore
+import SwiftUI
+
+struct SettingsView: View {
+    let controller: AppController
+
+    var body: some View {
+        TabView {
+            Tab("General", systemImage: "gearshape") { GeneralTab(controller: controller) }
+            Tab("Models", systemImage: "square.and.arrow.down") { ModelsTab(models: controller.models) }
+            Tab("AI", systemImage: "sparkles") { AITab(controller: controller) }
+            Tab("Styles", systemImage: "textformat") { StylesTab(controller: controller) }
+            Tab("Dictionary", systemImage: "character.book.closed") { DictionaryTab(controller: controller) }
+            Tab("Snippets", systemImage: "text.badge.plus") { SnippetsTab(controller: controller) }
+        }
+        .frame(width: 640, height: 500)
+    }
+}
+
+// MARK: - General
+
+private let languages: [(code: String?, name: String)] = [
+    (nil, "Auto-detect"), ("it", "Italian"), ("en", "English"), ("es", "Spanish"), ("fr", "French"),
+    ("de", "German"), ("pt", "Portuguese"), ("nl", "Dutch"), ("pl", "Polish"), ("ja", "Japanese"), ("zh", "Chinese"),
+]
+
+private struct GeneralTab: View {
+    @Bindable var controller: AppController
+    @State private var devices = AudioDevices.inputDevices()
+
+    var body: some View {
+        Form {
+            Section("Shortcuts") {
+                LabeledContent("Dictate", value: "Hold fn")
+                LabeledContent("Command mode", value: "Hold ctrl, then fn")
+            }
+            Section {
+                Picker("Language", selection: $controller.settings.languageCode) {
+                    ForEach(languages, id: \.name) { Text($0.name).tag($0.code) }
+                }
+                Picker("Microphone", selection: $controller.settings.microphoneUID) {
+                    Text("System default").tag(String?.none)
+                    ForEach(devices) { Text($0.name).tag(Optional($0.id)) }
+                }
+            } footer: {
+                if controller.models.activeInfo.requiresExplicitLanguage && controller.settings.languageCode == nil {
+                    Text("\(controller.models.activeInfo.displayName) can't auto-detect: pick a language.")
+                        .foregroundStyle(.orange)
+                }
+            }
+            Section("Permissions") {
+                PermissionStatus(title: "Microphone", granted: Permissions.microphone, pane: .microphone)
+                PermissionStatus(title: "Accessibility", granted: Permissions.accessibility, pane: .accessibility)
+                PermissionStatus(title: "Input Monitoring", granted: Permissions.inputMonitoring, pane: .inputMonitoring)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { devices = AudioDevices.inputDevices() }
+    }
+}
+
+private struct PermissionStatus: View {
+    let title: String
+    let granted: Bool
+    let pane: Permissions.Pane
+
+    var body: some View {
+        LabeledContent(title) {
+            if granted {
+                Label("Granted", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            } else {
+                Button("Open Settings") { Permissions.open(pane) }
+            }
+        }
+    }
+}
+
+// MARK: - Models
+
+private struct ModelsTab: View {
+    let models: ModelManager
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(ModelCatalog.all) { info in
+                    ModelRow(models: models, info: info)
+                }
+            } footer: {
+                Text("Parakeet, Cohere and Nemotron models are stored in FluidAudio's shared folder, also used by FluidVoice. Deleting one here deletes it for FluidVoice too.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .task { await models.refresh() }
+    }
+}
+
+private struct ModelRow: View {
+    let models: ModelManager
+    let info: ModelInfo
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(info.displayName).fontWeight(.medium)
+                    if models.activeModelID == info.id {
+                        Text("Active").font(.caption2.bold())
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(.tint.opacity(0.2), in: Capsule())
+                    }
+                }
+                Text("\(info.sizeLabel) · \(info.languages)").font(.caption).foregroundStyle(.secondary)
+                if !info.note.isEmpty { Text(info.note).font(.caption).foregroundStyle(.secondary) }
+                if case let .failed(message) = models.states[info.id] {
+                    Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
+                }
+            }
+            Spacer()
+            ModelActions(models: models, id: info.id)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// Download / progress+cancel / use / delete for one model.
+struct ModelActions: View {
+    let models: ModelManager
+    let id: ModelID
+
+    var body: some View {
+        let needsDownload = ModelCatalog.info(id).needsDownload
+        HStack(spacing: 8) {
+            switch models.states[id] ?? .notInstalled {
+            case .notInstalled:
+                Button("Download") { Task { await models.download(id) } }
+            case let .downloading(fraction):
+                ProgressView(value: fraction).frame(width: 90)
+                Text("\(Int(fraction * 100))%").monospacedDigit().font(.caption)
+                Button("Cancel") { models.cancel(id) }
+            case .failed:
+                Button("Retry") { Task { await models.download(id) } }
+            case .installed:
+                if models.activeModelID != id { Button("Use") { models.select(id) } }
+                if needsDownload {
+                    Button(role: .destructive) { Task { await models.delete(id) } } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help("Delete model files")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - AI
+
+private struct Provider: Identifiable {
+    let name: String
+    let baseURL: String
+    let model: String
+    var id: String { name }
+}
+
+private let providers = [
+    Provider(name: "Groq", baseURL: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile"),
+    Provider(name: "OpenAI", baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini"),
+    Provider(name: "OpenRouter", baseURL: "https://openrouter.ai/api/v1", model: "openai/gpt-4o-mini"),
+    Provider(name: "Ollama (local)", baseURL: "http://localhost:11434/v1", model: "llama3.2"),
+]
+
+private struct AITab: View {
+    @Bindable var controller: AppController
+    @State private var key = ""
+    @State private var testResult: (ok: Bool, text: String)?
+    @State private var testing = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Clean up dictation with AI", isOn: $controller.settings.llm.enabled)
+            } footer: {
+                Text("Removes filler words, fixes punctuation and self-corrections, adapts tone per app. Also required for command mode. Without it, Parlo pastes the raw transcript.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Provider (OpenAI-compatible)") {
+                Picker("Preset", selection: presetBinding) {
+                    Text("Custom").tag("Custom")
+                    ForEach(providers) { Text($0.name).tag($0.name) }
+                }
+                TextField("Base URL", text: $controller.settings.llm.baseURL)
+                TextField("Model", text: $controller.settings.llm.model)
+                LabeledContent("API key") {
+                    HStack {
+                        SecureField("Not set", text: $key).frame(maxWidth: 260)
+                        Button("Save") { controller.apiKey = key.isEmpty ? nil : key }
+                            .disabled(key == (controller.apiKey ?? ""))
+                    }
+                }
+                HStack {
+                    Button(testing ? "Testing…" : "Test connection") { test() }.disabled(testing)
+                    if let testResult {
+                        Label(testResult.text, systemImage: testResult.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                            .foregroundStyle(testResult.ok ? .green : .red).lineLimit(2)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { key = controller.apiKey ?? "" }
+    }
+
+    private var presetBinding: Binding<String> {
+        Binding(
+            get: { providers.first { $0.baseURL == controller.settings.llm.baseURL }?.name ?? "Custom" },
+            set: { name in
+                guard let p = providers.first(where: { $0.name == name }) else { return }
+                controller.settings.llm.baseURL = p.baseURL
+                controller.settings.llm.model = p.model
+            }
+        )
+    }
+
+    private func test() {
+        testing = true
+        testResult = nil
+        let client = LLMClient(settings: controller.settings.llm, apiKey: key.isEmpty ? nil : key)
+        Task {
+            do {
+                let reply = try await client.complete(system: "Reply with the single word OK.", user: "ping", timeout: 10)
+                testResult = (true, "Connected: \(reply.prefix(40))")
+            } catch {
+                testResult = (false, error.localizedDescription)
+            }
+            testing = false
+        }
+    }
+}
+
+// MARK: - Styles
+
+private struct StylesTab: View {
+    @Bindable var controller: AppController
+    @State private var adding = ""
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(allBundleIDs, id: \.self) { bundleID in
+                    Picker(selection: styleBinding(bundleID)) {
+                        ForEach(Style.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                    } label: {
+                        AppLabel(bundleID: bundleID)
+                    }
+                }
+                .onDelete { offsets in
+                    for i in offsets { controller.settings.styleOverrides[allBundleIDs[i]] = nil }
+                }
+            } header: {
+                Text("Tone per app")
+            } footer: {
+                Text("Used by AI cleanup. Apps not listed get Neutral.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Add an app") {
+                Picker("Running app", selection: $adding) {
+                    Text("Choose…").tag("")
+                    ForEach(runningApps, id: \.bundleID) { Text($0.name).tag($0.bundleID) }
+                }
+                .onChange(of: adding) { _, bundleID in
+                    guard !bundleID.isEmpty else { return }
+                    controller.settings.styleOverrides[bundleID] = StyleResolver.style(for: bundleID, overrides: [:])
+                    adding = ""
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var allBundleIDs: [String] {
+        Set(StyleResolver.defaults.keys).union(controller.settings.styleOverrides.keys)
+            .sorted { AppLabel.name(for: $0).localizedCaseInsensitiveCompare(AppLabel.name(for: $1)) == .orderedAscending }
+    }
+
+    private var runningApps: [(bundleID: String, name: String)] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app in app.bundleIdentifier.map { ($0, app.localizedName ?? $0) } }
+            .filter { !allBundleIDs.contains($0.0) }
+            .sorted { $0.1 < $1.1 }
+    }
+
+    private func styleBinding(_ bundleID: String) -> Binding<Style> {
+        Binding(
+            get: { StyleResolver.style(for: bundleID, overrides: controller.settings.styleOverrides) },
+            set: { controller.settings.styleOverrides[bundleID] = $0 }
+        )
+    }
+}
+
+private struct AppLabel: View {
+    let bundleID: String
+
+    static func name(for bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable().frame(width: 18, height: 18)
+            } else {
+                Image(systemName: "app.dashed").frame(width: 18)
+            }
+            Text(Self.name(for: bundleID))
+        }
+    }
+}
+
+// MARK: - Dictionary
+
+private struct DictionaryTab: View {
+    @Bindable var controller: AppController
+    @State private var term = ""
+    @State private var heardAs = ""
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach($controller.settings.dictionary) { $entry in
+                    HStack {
+                        TextField("Term", text: $entry.term).frame(maxWidth: 180)
+                        TextField("Often heard as (comma-separated)", text: heardAsBinding($entry))
+                    }
+                }
+                .onDelete { controller.settings.dictionary.remove(atOffsets: $0) }
+            } header: {
+                Text("Words Parlo should spell your way")
+            } footer: {
+                Text("“Heard as” variants are replaced exactly, even with AI off. Terms are also passed to the AI so it spells them right. Select a row and press delete to remove it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Add") {
+                HStack {
+                    TextField("Term, e.g. Kubernetes", text: $term).frame(maxWidth: 180)
+                    TextField("Heard as, e.g. deep agent, dip agent", text: $heardAs)
+                    Button("Add") {
+                        controller.settings.dictionary.append(DictionaryEntry(term: term, heardAs: Self.split(heardAs)))
+                        term = ""
+                        heardAs = ""
+                    }
+                    .disabled(term.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    static func split(_ s: String) -> [String] {
+        s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    private func heardAsBinding(_ entry: Binding<DictionaryEntry>) -> Binding<String> {
+        Binding(
+            get: { entry.wrappedValue.heardAs.joined(separator: ", ") },
+            set: { entry.wrappedValue.heardAs = Self.split($0) }
+        )
+    }
+}
+
+// MARK: - Snippets
+
+private struct SnippetsTab: View {
+    @Bindable var controller: AppController
+    @State private var trigger = ""
+    @State private var text = ""
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach($controller.settings.snippets) { $snippet in
+                    VStack(alignment: .leading) {
+                        TextField("Trigger phrase", text: $snippet.trigger)
+                        TextField("Expands to", text: $snippet.text, axis: .vertical).lineLimit(1...4)
+                    }
+                }
+                .onDelete { controller.settings.snippets.remove(atOffsets: $0) }
+            } header: {
+                Text("Say a trigger phrase, get the saved text")
+            } footer: {
+                Text("Works on its own (“my calendar link”) or mid-sentence (“book a slot here my calendar link”).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Add") {
+                TextField("Trigger, e.g. my calendar link", text: $trigger)
+                TextField("Text, e.g. https://cal.com/you", text: $text, axis: .vertical).lineLimit(1...4)
+                Button("Add") {
+                    controller.settings.snippets.append(Snippet(trigger: trigger, text: text))
+                    trigger = ""
+                    text = ""
+                }
+                .disabled(trigger.trimmingCharacters(in: .whitespaces).isEmpty || text.isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}

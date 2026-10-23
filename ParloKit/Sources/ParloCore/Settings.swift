@@ -66,6 +66,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var dictionary: [DictionaryEntry]
     public var snippets: [Snippet]
     public var hasCompletedOnboarding: Bool
+    /// Core Audio UID of the chosen input device; nil follows the system default.
+    public var microphoneUID: String?
 
     public static let `default` = AppSettings(
         activeModelID: .appleSpeech,
@@ -74,12 +76,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         styleOverrides: [:],
         dictionary: [],
         snippets: [],
-        hasCompletedOnboarding: false
+        hasCompletedOnboarding: false,
+        microphoneUID: nil
     )
 
     public init(
         activeModelID: ModelID, languageCode: String?, llm: LLMSettings, styleOverrides: [String: Style],
-        dictionary: [DictionaryEntry], snippets: [Snippet], hasCompletedOnboarding: Bool
+        dictionary: [DictionaryEntry], snippets: [Snippet], hasCompletedOnboarding: Bool, microphoneUID: String? = nil
     ) {
         self.activeModelID = activeModelID
         self.languageCode = languageCode
@@ -88,6 +91,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.dictionary = dictionary
         self.snippets = snippets
         self.hasCompletedOnboarding = hasCompletedOnboarding
+        self.microphoneUID = microphoneUID
     }
 
     public init(from decoder: Decoder) throws {
@@ -101,5 +105,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         dictionary = try c.decodeIfPresent([DictionaryEntry].self, forKey: .dictionary) ?? d.dictionary
         snippets = try c.decodeIfPresent([Snippet].self, forKey: .snippets) ?? d.snippets
         hasCompletedOnboarding = try c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? d.hasCompletedOnboarding
+        microphoneUID = try c.decodeIfPresent(String.self, forKey: .microphoneUID)
     }
 }
