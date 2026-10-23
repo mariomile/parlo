@@ -85,7 +85,7 @@ actor ParakeetTranscriber: Transcriber {
     private func startLoadingCtcModels() {
         guard ctcModels == nil, !loadingCtc else { return }
         loadingCtc = true
-        Task { await ctcLoaded(try? await CtcModels.downloadAndLoad(variant: .ctc110m)) }
+        Task { ctcLoaded(try? await CtcModels.downloadAndLoad(variant: .ctc110m)) }
     }
 
     private func ctcLoaded(_ models: CtcModels?) {
