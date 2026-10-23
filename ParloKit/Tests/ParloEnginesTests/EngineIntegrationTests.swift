@@ -61,11 +61,37 @@ struct EngineIntegrationTests {
         #expect(try await detector.containsSpeech(try Self.speech("Sì.", voice: "Alice")))
     }
 
+    @Test func parakeetVocabularyBiasing() async throws {
+        let installer = EngineInstaller()
+        guard await installer.isInstalled(.parakeetV3) else { return }
+        let transcriber = try await installer.makeTranscriber(.parakeetV3)
+        let dictionary = [
+            DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "AGENTS.md"), DictionaryEntry(term: "pull request"),
+        ]
+        // The CTC model loads in the background after the first dictation that has a dictionary.
+        let warmup = try Self.speech("Aggiorna il file CLAUDE.md", voice: "Alice")
+        for _ in 0..<60 where try await !transcriber.transcribe(warmup, languageCode: "it", dictionary: dictionary)
+            .contains("CLAUDE.md") {
+            try await Task.sleep(for: .seconds(1))
+        }
+        for (phrase, expected) in [
+            ("Aggiorna il file CLAUDE.md e apri una pull request", ["CLAUDE.md", "pull request"]),
+            ("Modifica CLAUDE.md o AGENTS.md prima del commit", ["CLAUDE.md", "AGENTS.md"]),
+        ] {
+            let audio = try Self.speech(phrase, voice: "Alice")
+            let without = try await transcriber.transcribe(audio, languageCode: "it", dictionary: [])
+            let with = try await transcriber.transcribe(audio, languageCode: "it", dictionary: dictionary)
+            print("[parakeetV3] without vocabulary: \(without)")
+            print("[parakeetV3] with vocabulary:    \(with)")
+            for term in expected { #expect(with.contains(term), "\(with)") }
+        }
+    }
+
     func check(_ transcriber: any Transcriber, _ info: ModelInfo, _ language: String, _ text: String,
                voice: String, expecting word: String) async throws {
         let result: String
         do {
-            result = try await transcriber.transcribe(try Self.speech(text, voice: voice), languageCode: language)
+            result = try await transcriber.transcribe(try Self.speech(text, voice: voice), languageCode: language, dictionary: [])
         } catch let TranscriptionError.assetsInstalling(locale) {
             print("[\(info.id.rawValue)] \(language): skipped, system assets for \(locale) not installed")
             return
@@ -79,7 +105,7 @@ struct EngineIntegrationTests {
         guard await installer.isInstalled(.cohereTranscribe) else { return }
         let t = try await installer.makeTranscriber(.cohereTranscribe)
         await #expect(throws: TranscriptionError.languageRequired("Cohere Transcribe")) {
-            try await t.transcribe([Float](repeating: 0, count: 16_000), languageCode: nil)
+            try await t.transcribe([Float](repeating: 0, count: 16_000), languageCode: nil, dictionary: [])
         }
     }
 }

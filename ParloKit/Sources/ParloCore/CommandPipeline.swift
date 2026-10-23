@@ -37,7 +37,7 @@ public struct CommandPipeline: Sendable {
         guard let llm else { throw CommandError.llmNotConfigured }
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else { return .discarded }
         if let speech, try await !speech.containsSpeech(samples) { return .empty }
-        let instruction = try await transcriber.transcribe(samples, languageCode: languageCode)
+        let instruction = try await transcriber.transcribe(samples, languageCode: languageCode, dictionary: [])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return .empty }
         let result = try await llm.complete(

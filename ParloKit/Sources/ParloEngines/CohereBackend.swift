@@ -33,7 +33,7 @@ struct CohereTranscriber: Transcriber {
     let pipeline: CoherePipeline
     let models: CoherePipeline.LoadedModels
 
-    func transcribe(_ samples: [Float], languageCode: String?) async throws -> String {
+    func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         guard let languageCode else { throw TranscriptionError.languageRequired("Cohere Transcribe") }
         guard let language = CohereAsrConfig.Language(rawValue: languageCode) else {
             throw TranscriptionError.unsupportedLanguage(languageCode)

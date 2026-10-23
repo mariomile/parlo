@@ -8,7 +8,7 @@ import Speech
 /// Missing assets download in the background; until then dictation fails fast with `assetsInstalling`
 /// instead of waiting on a download of unknown length.
 struct AppleSpeechTranscriber: Transcriber {
-    func transcribe(_ samples: [Float], languageCode: String?) async throws -> String {
+    func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         // A bare "it" would match it_CH; pin the usual region.
         let requested = NemotronBackend.regionalCode(languageCode).map(Locale.init(identifier:)) ?? Locale.current
         guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: requested) else {
@@ -21,6 +21,12 @@ struct AppleSpeechTranscriber: Transcriber {
         }
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let terms = dictionary.terms
+        if !terms.isEmpty {
+            let context = AnalysisContext()
+            context.contextualStrings[.general] = terms
+            try await analyzer.setContext(context)
+        }
         let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
         let buffer = try AudioBuffers.make(samples: samples, format: format)
 

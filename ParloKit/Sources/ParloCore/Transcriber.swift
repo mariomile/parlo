@@ -2,7 +2,8 @@ import Foundation
 
 public protocol Transcriber: Sendable {
     /// `samples`: 16 kHz mono Float32. `languageCode`: BCP-47 ("it"), nil = auto-detect.
-    func transcribe(_ samples: [Float], languageCode: String?) async throws -> String
+    /// `dictionary`: the user's terms (and what they sound like), which engines that support it use to bias recognition.
+    func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String
 }
 
 /// Tells real speech apart from silence and room noise, which ASR models turn into invented words.

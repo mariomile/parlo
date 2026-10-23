@@ -55,12 +55,17 @@ actor WhisperKitTranscriber: Transcriber {
         self.kit = kit
     }
 
-    func transcribe(_ samples: [Float], languageCode: String?) async throws -> String {
+    func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         var options = DecodingOptions()
         options.language = languageCode
         options.detectLanguage = languageCode == nil
         options.skipSpecialTokens = true
         options.withoutTimestamps = true
+        let terms = dictionary.terms
+        if !terms.isEmpty, let tokenizer = kit.tokenizer {
+            options.promptTokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
+                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+        }
         let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
         return results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }

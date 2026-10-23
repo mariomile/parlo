@@ -19,3 +19,10 @@ public enum DictionaryReplacer {
         return result
     }
 }
+
+extension [DictionaryEntry] {
+    /// The terms to write, trimmed, without blanks.
+    public var terms: [String] {
+        map { $0.term.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+}

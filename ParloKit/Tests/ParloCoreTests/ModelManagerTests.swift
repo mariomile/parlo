@@ -113,7 +113,7 @@ actor FakeInstaller: ModelInstaller {
         await m.download(.parakeetV3)
         m.select(.parakeetV3)
         let t = try await m.transcriber()
-        #expect(try await t.transcribe([], languageCode: nil) == "parakeetV3")
+        #expect(try await t.transcribe([], languageCode: nil, dictionary: []) == "parakeetV3")
         #expect(await inst.made == [.appleSpeech, .parakeetV3])
     }
 
