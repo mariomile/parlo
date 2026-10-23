@@ -7,7 +7,8 @@ public struct SileroSpeechDetector: SpeechDetector {
     let manager: VadManager
 
     public static func load() async throws -> SileroSpeechDetector {
-        SileroSpeechDetector(manager: try await VadManager())
+        // FluidAudio defaults to 0.85, which misses quiet or distant speech. Room noise peaks near 0.4.
+        SileroSpeechDetector(manager: try await VadManager(config: VadConfig(defaultThreshold: 0.6)))
     }
 
     public func containsSpeech(_ samples: [Float]) async throws -> Bool {

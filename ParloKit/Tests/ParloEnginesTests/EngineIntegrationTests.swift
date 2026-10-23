@@ -54,6 +54,11 @@ struct EngineIntegrationTests {
         #expect(try await !detector.containsSpeech([Float](repeating: 0, count: 16_000)))
         let speech = try Self.speech("Allora, mandami il file entro stasera.", voice: "Alice")
         #expect(try await detector.containsSpeech(speech))
+        // Quiet or distant speech, peaking around 0.05 like a soft voice on a MacBook mic.
+        let peak = speech.map(abs).max() ?? 1
+        #expect(try await detector.containsSpeech(speech.map { $0 / peak * 0.05 }))
+        // A single short word.
+        #expect(try await detector.containsSpeech(try Self.speech("Sì.", voice: "Alice")))
     }
 
     func check(_ transcriber: any Transcriber, _ info: ModelInfo, _ language: String, _ text: String,
