@@ -41,6 +41,14 @@ actor FakeInstaller: ModelInstaller {
         #expect(!ModelCatalog.info(.appleSpeech).needsDownload)
     }
 
+    @Test func missingActiveModelFallsBackWithoutSaving() async {
+        var saved: [ModelID] = []
+        let m = ModelManager(installer: FakeInstaller(), activeModelID: .parakeetV3) { saved.append($0) }
+        await m.refresh()
+        #expect(m.activeModelID == .appleSpeech)
+        #expect(saved.isEmpty)
+    }
+
     @Test func refreshReadsInstaller() async {
         let inst = FakeInstaller()
         let m = ModelManager(installer: inst, activeModelID: .appleSpeech) { _ in }

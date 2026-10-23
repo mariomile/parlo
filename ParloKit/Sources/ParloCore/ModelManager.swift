@@ -36,7 +36,11 @@ public final class ModelManager {
             // A download may have started while we were checking.
             if downloads[id] == nil { states[id] = installed ? .installed : .notInstalled }
         }
-        if states[activeModelID] != .installed { setActive(.appleSpeech) }
+        // Fall back for this session only: a model that briefly looks missing must not replace the saved choice.
+        if states[activeModelID] != .installed {
+            activeModelID = .appleSpeech
+            cached = nil
+        }
     }
 
     /// Returns when the download finishes, fails or is cancelled.
