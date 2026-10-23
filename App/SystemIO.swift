@@ -89,6 +89,10 @@ enum Permissions {
     static var accessibility: Bool { AXIsProcessTrusted() }
     static var inputMonitoring: Bool { CGPreflightListenEventAccess() }
     static var allGranted: Bool { microphone && accessibility && inputMonitoring }
+    /// "Press 🌐 key to" opens the emoji picker or Apple Dictation (2, 3), which fights the fn hotkey.
+    static var globeKeyConflicts: Bool {
+        [2, 3].contains(UserDefaults(suiteName: "com.apple.HIToolbox")?.integer(forKey: "AppleFnUsageType"))
+    }
 
     static func requestMicrophone() async {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
