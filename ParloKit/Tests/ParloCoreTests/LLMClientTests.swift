@@ -77,4 +77,17 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             try await LLMClient(settings: settings, apiKey: nil, session: session()).complete(system: "S", user: "U", timeout: 5)
         }
     }
+
+    @Test func keyNeverSentOverPlainHTTP() async throws {
+        StubProtocol.handler = { _ in (200, Data(#"{"choices":[{"message":{"content":"x"}}]}"#.utf8)) }
+        var remote = settings
+        remote.baseURL = "http://api.example.com/v1"
+        await #expect(throws: LLMError.insecureURL) {
+            try await LLMClient(settings: remote, apiKey: "k", session: session()).complete(system: "S", user: "U", timeout: 5)
+        }
+        var local = settings
+        local.baseURL = "http://localhost:11434/v1"
+        _ = try await LLMClient(settings: local, apiKey: "k", session: session()).complete(system: "S", user: "U", timeout: 5)
+        #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer k")
+    }
 }

@@ -8,12 +8,14 @@ public enum LLMError: Error, Equatable, LocalizedError {
     case invalidURL
     case http(Int, String)
     case emptyResponse
+    case insecureURL
 
     public var errorDescription: String? {
         switch self {
         case .invalidURL: "Invalid LLM base URL"
         case let .http(code, body): "LLM error \(code): \(body.prefix(200))"
         case .emptyResponse: "LLM returned an empty response"
+        case .insecureURL: "The API key is only sent over https (or to this Mac)"
         }
     }
 }
@@ -54,6 +56,8 @@ public struct LLMClient: ChatCompleting {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let apiKey, !apiKey.isEmpty {
+            let local = ["localhost", "127.0.0.1", "::1"].contains(url.host() ?? "")
+            guard url.scheme == "https" || local else { throw LLMError.insecureURL }
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONEncoder().encode(Request(
