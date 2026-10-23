@@ -8,6 +8,14 @@ import Testing
 /// Models not installed are skipped, unless listed in `PARLO_DOWNLOAD` (comma-separated ModelID raw values).
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["PARLO_INTEGRATION"] == "1"))
 struct EngineIntegrationTests {
+    private final class TestBundleToken {}
+
+    /// MLX finds its Metal library by scanning the registered bundles for `mlx-swift_Cmlx.bundle`. `swift test` loads
+    /// the test bundle without registering it, so register it here before any MLX model is loaded.
+    init() {
+        _ = Bundle(for: TestBundleToken.self)
+    }
+
     static let toDownload = Set(
         (ProcessInfo.processInfo.environment["PARLO_DOWNLOAD"] ?? "").split(separator: ",").map(String.init)
     )
@@ -34,7 +42,9 @@ struct EngineIntegrationTests {
             try await installer.install(id) { _ in }
             #expect(await installer.isInstalled(id))
         }
+        let loadStart = ContinuousClock.now
         let transcriber = try await installer.makeTranscriber(id)
+        print("[\(id.rawValue)] load: \(ContinuousClock.now - loadStart)")
         let info = ModelCatalog.info(id)
 
         if id != .parakeetV2 {
@@ -90,13 +100,16 @@ struct EngineIntegrationTests {
     func check(_ transcriber: any Transcriber, _ info: ModelInfo, _ language: String, _ text: String,
                voice: String, expecting word: String) async throws {
         let result: String
+        let samples = try Self.speech(text, voice: voice)
+        let start = ContinuousClock.now
         do {
-            result = try await transcriber.transcribe(try Self.speech(text, voice: voice), languageCode: language, dictionary: [])
+            result = try await transcriber.transcribe(samples, languageCode: language, dictionary: [])
         } catch let TranscriptionError.assetsInstalling(locale) {
             print("[\(info.id.rawValue)] \(language): skipped, system assets for \(locale) not installed")
             return
         }
-        print("[\(info.id.rawValue)] \(language): \(result)")
+        let wall = ContinuousClock.now - start
+        print("[\(info.id.rawValue)] \(language): \(result) (audio \(String(format: "%.2f", Double(samples.count) / 16_000)) s, wall \(wall))")
         #expect(result.lowercased().contains(word), "\(info.displayName): \(result)")
     }
 
@@ -107,5 +120,17 @@ struct EngineIntegrationTests {
         await #expect(throws: TranscriptionError.languageRequired("Cohere Transcribe")) {
             try await t.transcribe([Float](repeating: 0, count: 16_000), languageCode: nil, dictionary: [])
         }
+    }
+
+    @Test func qwen3DetectsLanguageWhenNoneIsSet() async throws {
+        let installer = EngineInstaller()
+        guard await installer.isInstalled(.qwen3ASR) else { return }
+        let t = try await installer.makeTranscriber(.qwen3ASR)
+        let italian = try await t.transcribe(
+            try Self.speech("Domani andiamo al mercato a comprare la frutta fresca.", voice: "Alice"),
+            languageCode: nil, dictionary: []
+        )
+        print("[qwen3ASR] auto-detect: \(italian)")
+        #expect(italian.lowercased().contains("mercato"), "\(italian)")
     }
 }
