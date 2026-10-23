@@ -14,15 +14,21 @@ public struct DictationPipeline: Sendable {
     let transcriber: any Transcriber
     let llm: (any ChatCompleting)?
     let settings: AppSettings
+    let speech: (any SpeechDetector)?
 
-    public init(transcriber: any Transcriber, llm: (any ChatCompleting)?, settings: AppSettings) {
+    public init(
+        transcriber: any Transcriber, llm: (any ChatCompleting)?, settings: AppSettings,
+        speech: (any SpeechDetector)? = nil
+    ) {
         self.transcriber = transcriber
         self.llm = llm
         self.settings = settings
+        self.speech = speech
     }
 
     public func run(samples: [Float], bundleID: String?) async throws -> DictationOutcome {
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else { return .discarded }
+        if let speech, try await !speech.containsSpeech(samples) { return .empty }
         let raw = try await transcriber.transcribe(samples, languageCode: settings.languageCode)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return .empty }

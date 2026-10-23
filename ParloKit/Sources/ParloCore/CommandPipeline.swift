@@ -21,16 +21,22 @@ public struct CommandPipeline: Sendable {
     let transcriber: any Transcriber
     let llm: (any ChatCompleting)?
     let languageCode: String?
+    let speech: (any SpeechDetector)?
 
-    public init(transcriber: any Transcriber, llm: (any ChatCompleting)?, languageCode: String?) {
+    public init(
+        transcriber: any Transcriber, llm: (any ChatCompleting)?, languageCode: String?,
+        speech: (any SpeechDetector)? = nil
+    ) {
         self.transcriber = transcriber
         self.llm = llm
         self.languageCode = languageCode
+        self.speech = speech
     }
 
     public func run(samples: [Float], selection: String?) async throws -> CommandOutcome {
         guard let llm else { throw CommandError.llmNotConfigured }
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else { return .discarded }
+        if let speech, try await !speech.containsSpeech(samples) { return .empty }
         let instruction = try await transcriber.transcribe(samples, languageCode: languageCode)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return .empty }

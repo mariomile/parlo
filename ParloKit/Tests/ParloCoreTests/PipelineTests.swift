@@ -26,6 +26,23 @@ import Testing
         #expect(try await p.run(samples: oneSecond, bundleID: nil) == .empty)
     }
 
+    @Test func silenceIsEmptyWithoutTranscribing() async throws {
+        // Parakeet invents words ("Oh yeah.") on silence; the detector must stop them reaching the paste.
+        let p = DictationPipeline(
+            transcriber: FakeTranscriber(text: "Oh yeah."), llm: nil, settings: settings,
+            speech: FakeSpeechDetector(speech: false)
+        )
+        #expect(try await p.run(samples: oneSecond, bundleID: nil) == .empty)
+    }
+
+    @Test func speechIsTranscribed() async throws {
+        let p = DictationPipeline(
+            transcriber: FakeTranscriber(text: "ciao"), llm: nil, settings: settings,
+            speech: FakeSpeechDetector(speech: true)
+        )
+        #expect(try await p.run(samples: oneSecond, bundleID: nil) == .inserted(text: "ciao", cleanupError: nil))
+    }
+
     @Test func noLLMAppliesDictionaryAndSnippets() async throws {
         let p = DictationPipeline(transcriber: FakeTranscriber(text: "open cloud code at my address"), llm: nil, settings: settings)
         #expect(try await p.run(samples: oneSecond, bundleID: nil) == .inserted(text: "open Claude Code at Via Roma 1", cleanupError: nil))
@@ -66,6 +83,16 @@ import Testing
     @Test func requiresLLM() async throws {
         let p = CommandPipeline(transcriber: FakeTranscriber(text: "make formal"), llm: nil, languageCode: nil)
         await #expect(throws: CommandError.llmNotConfigured) { try await p.run(samples: oneSecond, selection: "x") }
+    }
+
+    @Test func silenceIsEmptyWithoutCallingLLM() async throws {
+        let llm = FakeLLM { _, _ in "Dear Sir." }
+        let p = CommandPipeline(
+            transcriber: FakeTranscriber(text: "Hello."), llm: llm, languageCode: nil,
+            speech: FakeSpeechDetector(speech: false)
+        )
+        #expect(try await p.run(samples: oneSecond, selection: "x") == .empty)
+        #expect(llm.calls.isEmpty)
     }
 
     @Test func forwardsSelection() async throws {

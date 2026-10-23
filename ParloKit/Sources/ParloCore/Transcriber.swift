@@ -5,6 +5,11 @@ public protocol Transcriber: Sendable {
     func transcribe(_ samples: [Float], languageCode: String?) async throws -> String
 }
 
+/// Tells real speech apart from silence and room noise, which ASR models turn into invented words.
+public protocol SpeechDetector: Sendable {
+    func containsSpeech(_ samples: [Float]) async throws -> Bool
+}
+
 public enum TranscriptionError: Error, Equatable, LocalizedError {
     case languageRequired(String)
     case unsupportedLanguage(String)

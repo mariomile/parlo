@@ -45,6 +45,17 @@ struct EngineIntegrationTests {
                         voice: "Samantha", expecting: "fox")
     }
 
+    @Test func speechDetectorIgnoresRoomNoise() async throws {
+        let detector = try await SileroSpeechDetector.load()
+        // Room noise at the level measured on a MacBook mic (RMS about 0.01): models hallucinate words on it.
+        var rng = SystemRandomNumberGenerator()
+        let noise = (0..<32_000).map { _ in Float.random(in: -0.018...0.018, using: &rng) }
+        #expect(try await !detector.containsSpeech(noise))
+        #expect(try await !detector.containsSpeech([Float](repeating: 0, count: 16_000)))
+        let speech = try Self.speech("Allora, mandami il file entro stasera.", voice: "Alice")
+        #expect(try await detector.containsSpeech(speech))
+    }
+
     func check(_ transcriber: any Transcriber, _ info: ModelInfo, _ language: String, _ text: String,
                voice: String, expecting word: String) async throws {
         let result: String

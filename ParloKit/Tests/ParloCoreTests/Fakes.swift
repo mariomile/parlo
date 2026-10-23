@@ -19,3 +19,8 @@ final class FakeLLM: ChatCompleting, @unchecked Sendable {
 }
 
 let oneSecond = [Float](repeating: 0.1, count: 16_000)
+
+struct FakeSpeechDetector: SpeechDetector {
+    var speech: Bool
+    func containsSpeech(_ samples: [Float]) async throws -> Bool { speech }
+}
