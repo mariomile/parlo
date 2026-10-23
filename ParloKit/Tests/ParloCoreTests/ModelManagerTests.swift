@@ -29,6 +29,7 @@ actor FakeInstaller: ModelInstaller {
 
     func makeTranscriber(_ id: ModelID) async throws -> any Transcriber {
         made.append(id)
+        try await Task.sleep(for: .milliseconds(20))
         return FakeTranscriber(text: id.rawValue)
     }
 }
@@ -106,5 +107,27 @@ actor FakeInstaller: ModelInstaller {
         let t = try await m.transcriber()
         #expect(try await t.transcribe([], languageCode: nil) == "parakeetV3")
         #expect(await inst.made == [.appleSpeech, .parakeetV3])
+    }
+
+    @Test func concurrentTranscriberCallsLoadOnce() async throws {
+        let inst = FakeInstaller()
+        let m = ModelManager(installer: inst, activeModelID: .appleSpeech) { _ in }
+        m.warmUp()
+        async let a = m.transcriber()
+        async let b = m.transcriber()
+        _ = try await (a, b)
+        #expect(await inst.made == [.appleSpeech])
+    }
+
+    @Test func refreshKeepsRunningDownload() async {
+        let inst = FakeInstaller()
+        await inst.setHang(true)
+        let m = ModelManager(installer: inst, activeModelID: .appleSpeech) { _ in }
+        async let refreshed: Void = m.refresh()
+        let download = Task { await m.download(.parakeetV3) }
+        await refreshed
+        #expect(m.states[.parakeetV3] != .notInstalled)
+        m.cancel(.parakeetV3)
+        await download.value
     }
 }

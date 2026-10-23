@@ -247,16 +247,21 @@ private struct StylesTab: View {
 
     var body: some View {
         Form {
+            let bundleIDs = allBundleIDs
             Section {
-                ForEach(allBundleIDs, id: \.self) { bundleID in
-                    Picker(selection: styleBinding(bundleID)) {
-                        ForEach(Style.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                    } label: {
-                        AppLabel(bundleID: bundleID)
+                ForEach(bundleIDs, id: \.self) { bundleID in
+                    HStack {
+                        Picker(selection: styleBinding(bundleID)) {
+                            ForEach(Style.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                        } label: {
+                            AppLabel(bundleID: bundleID)
+                        }
+                        RemoveButton(help: StyleResolver.defaults[bundleID] == nil ? "Remove" : "Reset to default") {
+                            controller.settings.styleOverrides[bundleID] = nil
+                        }
+                        .opacity(controller.settings.styleOverrides[bundleID] == nil ? 0 : 1)
+                        .disabled(controller.settings.styleOverrides[bundleID] == nil)
                     }
-                }
-                .onDelete { offsets in
-                    for i in offsets { controller.settings.styleOverrides[allBundleIDs[i]] = nil }
                 }
             } header: {
                 Text("Tone per app")
@@ -266,7 +271,7 @@ private struct StylesTab: View {
             Section("Add an app") {
                 Picker("Running app", selection: $adding) {
                     Text("Choose…").tag("")
-                    ForEach(runningApps, id: \.bundleID) { Text($0.name).tag($0.bundleID) }
+                    ForEach(runningApps(excluding: Set(bundleIDs)), id: \.bundleID) { Text($0.name).tag($0.bundleID) }
                 }
                 .onChange(of: adding) { _, bundleID in
                     guard !bundleID.isEmpty else { return }
@@ -280,14 +285,16 @@ private struct StylesTab: View {
 
     private var allBundleIDs: [String] {
         Set(StyleResolver.defaults.keys).union(controller.settings.styleOverrides.keys)
-            .sorted { AppLabel.name(for: $0).localizedCaseInsensitiveCompare(AppLabel.name(for: $1)) == .orderedAscending }
+            .map { (id: $0, name: AppLabel.name(for: $0)) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map(\.id)
     }
 
-    private var runningApps: [(bundleID: String, name: String)] {
+    private func runningApps(excluding listed: Set<String>) -> [(bundleID: String, name: String)] {
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
             .compactMap { app in app.bundleIdentifier.map { ($0, app.localizedName ?? $0) } }
-            .filter { !allBundleIDs.contains($0.0) }
+            .filter { !listed.contains($0.0) }
             .sorted { $0.1 < $1.1 }
     }
 
@@ -332,14 +339,16 @@ private struct DictionaryTab: View {
                 ForEach($controller.settings.dictionary) { $entry in
                     HStack {
                         TextField("Term", text: $entry.term).frame(maxWidth: 180)
-                        TextField("Often heard as (comma-separated)", text: heardAsBinding($entry))
+                        HeardAsField(heardAs: $entry.heardAs)
+                        RemoveButton(help: "Remove") {
+                            controller.settings.dictionary.removeAll { $0.id == entry.id }
+                        }
                     }
                 }
-                .onDelete { controller.settings.dictionary.remove(atOffsets: $0) }
             } header: {
                 Text("Words Parlo should spell your way")
             } footer: {
-                Text("“Heard as” variants are replaced exactly, even with AI off. Terms are also passed to the AI so it spells them right. Select a row and press delete to remove it.")
+                Text("“Heard as” variants are replaced exactly, even with AI off. Terms are also passed to the AI so it spells them right.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Add") {
@@ -361,12 +370,37 @@ private struct DictionaryTab: View {
     static func split(_ s: String) -> [String] {
         s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
+}
 
-    private func heardAsBinding(_ entry: Binding<DictionaryEntry>) -> Binding<String> {
-        Binding(
-            get: { entry.wrappedValue.heardAs.joined(separator: ", ") },
-            set: { entry.wrappedValue.heardAs = Self.split($0) }
-        )
+/// Edits the variants as free text; splits into the list when editing ends, so commas and spaces survive typing.
+private struct HeardAsField: View {
+    @Binding var heardAs: [String]
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("Often heard as (comma-separated)", text: $text)
+            .focused($focused)
+            .onAppear { text = heardAs.joined(separator: ", ") }
+            .onSubmit(commit)
+            .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        let parsed = DictionaryTab.split(text)
+        if parsed != heardAs { heardAs = parsed }
+    }
+}
+
+private struct RemoveButton: View {
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) { Image(systemName: "minus.circle") }
+            .buttonStyle(.borderless)
+            .help(help)
     }
 }
 
@@ -381,12 +415,16 @@ private struct SnippetsTab: View {
         Form {
             Section {
                 ForEach($controller.settings.snippets) { $snippet in
-                    VStack(alignment: .leading) {
-                        TextField("Trigger phrase", text: $snippet.trigger)
-                        TextField("Expands to", text: $snippet.text, axis: .vertical).lineLimit(1...4)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading) {
+                            TextField("Trigger phrase", text: $snippet.trigger)
+                            TextField("Expands to", text: $snippet.text, axis: .vertical).lineLimit(1...4)
+                        }
+                        RemoveButton(help: "Remove") {
+                            controller.settings.snippets.removeAll { $0.id == snippet.id }
+                        }
                     }
                 }
-                .onDelete { controller.settings.snippets.remove(atOffsets: $0) }
             } header: {
                 Text("Say a trigger phrase, get the saved text")
             } footer: {

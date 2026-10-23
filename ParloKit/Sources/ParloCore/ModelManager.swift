@@ -17,7 +17,8 @@ public final class ModelManager {
     private let installer: any ModelInstaller
     private let onActiveChange: (ModelID) -> Void
     private var downloads: [ModelID: Task<Void, Never>] = [:]
-    private var cached: (id: ModelID, transcriber: any Transcriber)?
+    /// The active model's transcriber, loaded once; concurrent callers share the same load.
+    private var cached: (id: ModelID, load: Task<any Transcriber, any Error>)?
 
     public init(installer: any ModelInstaller, activeModelID: ModelID, onActiveChange: @escaping (ModelID) -> Void) {
         self.installer = installer
@@ -31,7 +32,9 @@ public final class ModelManager {
 
     public func refresh() async {
         for id in ModelID.allCases where downloads[id] == nil {
-            states[id] = await installer.isInstalled(id) ? .installed : .notInstalled
+            let installed = await installer.isInstalled(id)
+            // A download may have started while we were checking.
+            if downloads[id] == nil { states[id] = installed ? .installed : .notInstalled }
         }
         if states[activeModelID] != .installed { setActive(.appleSpeech) }
     }
@@ -81,10 +84,16 @@ public final class ModelManager {
     /// Loads (once) and returns the transcriber for the active model.
     public func transcriber() async throws -> any Transcriber {
         let id = activeModelID
-        if let cached, cached.id == id { return cached.transcriber }
-        let t = try await installer.makeTranscriber(id)
-        if activeModelID == id { cached = (id, t) }
-        return t
+        if let cached, cached.id == id { return try await cached.load.value }
+        let installer = installer
+        let load = Task { try await installer.makeTranscriber(id) }
+        cached = (id, load)
+        do {
+            return try await load.value
+        } catch {
+            if cached?.id == id { cached = nil } // let the next dictation retry
+            throw error
+        }
     }
 
     /// Loads the active model in the background so the first dictation is fast.

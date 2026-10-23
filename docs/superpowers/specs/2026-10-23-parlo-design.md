@@ -105,7 +105,7 @@ Menu bar menu: status, active model, "Copy last dictation", Settings, Quit. Sett
 | Situation | Behavior |
 |---|---|
 | First launch | Checklist: Microphone, Accessibility, Input Monitoring (needed by the Fn key event tap), and instruction to set "Press 🌐 key to: Do nothing" so Fn doesn't open the emoji picker |
-| Permission missing at use time | HUD error with a button that opens the right System Settings pane |
+| Permission missing at use time | HUD error naming the permission; menu → Permissions & Setup reopens the checklist with buttons to the right System Settings panes |
 | Active model still downloading | HUD: "Model downloading" with progress; nothing recorded |
 | Download fails or is cancelled | Partial files deleted; model stays "not downloaded" |
 | Active model deleted | Active model reverts to Apple Speech |

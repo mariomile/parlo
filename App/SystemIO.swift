@@ -50,19 +50,20 @@ enum TextInserter {
         pb.setData(Data(), forType: PasteboardSnapshot.transientType)
         let ours = pb.changeCount
         KeyPoster.paste()
-        try? await Task.sleep(for: .milliseconds(250))
+        try? await Task.sleep(for: .milliseconds(600))
         if pb.changeCount == ours { saved.restore(pb) }
     }
 }
 
 enum SelectionReader {
     /// Copies the current selection with Cmd+C and restores the clipboard. Nil when nothing is selected.
+    /// Waits up to 1 s: busy Electron apps can take a while to answer Cmd+C.
     static func read() async -> String? {
         let pb = NSPasteboard.general
         let saved = PasteboardSnapshot(pb)
         let before = pb.changeCount
         KeyPoster.copy()
-        for _ in 0..<15 where pb.changeCount == before {
+        for _ in 0..<50 where pb.changeCount == before {
             try? await Task.sleep(for: .milliseconds(20))
         }
         guard pb.changeCount != before else { return nil }

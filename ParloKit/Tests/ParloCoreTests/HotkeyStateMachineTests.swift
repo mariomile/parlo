@@ -25,6 +25,21 @@ import Testing
         #expect(m.handle(fn: false, ctrl: true) == .stop)
     }
 
+    @Test func keyWhileFnHeldCancels() {
+        var m = HotkeyStateMachine()
+        #expect(m.handle(fn: true, ctrl: false) == .startDictation)
+        #expect(m.keyPressed() == .cancel)
+        #expect(m.keyPressed() == nil)
+        #expect(m.handle(fn: false, ctrl: false) == nil)
+        #expect(m.handle(fn: true, ctrl: false) == .startDictation)
+    }
+
+    @Test func keyWhileIdleIsIgnored() {
+        var m = HotkeyStateMachine()
+        #expect(m.keyPressed() == nil)
+        #expect(m.handle(fn: true, ctrl: false) == .startDictation)
+    }
+
     @Test func cancelResets() {
         var m = HotkeyStateMachine()
         _ = m.handle(fn: true, ctrl: false)

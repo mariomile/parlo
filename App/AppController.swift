@@ -97,21 +97,21 @@ final class AppController {
         case .startDictation: begin(command: false)
         case .startCommand: begin(command: true)
         case .stop: end()
+        case .cancel: cancel()
         }
     }
 
     private func begin(command: Bool) {
         guard phase == .idle else { return }
+        // On failure the hotkey stays held: its release is ignored because phase is still idle.
         if let problem = blocker(command: command) {
             hud.show(.message(problem, isError: true))
-            hotkey.reset()
             return
         }
         do {
             try recorder.start(deviceUID: settings.microphoneUID)
         } catch {
             hud.show(.message(error.localizedDescription, isError: true))
-            hotkey.reset()
             return
         }
         phase = .recording
@@ -127,8 +127,8 @@ final class AppController {
 
     /// Why a dictation can't start right now, as a HUD message.
     private func blocker(command: Bool) -> String? {
-        if !Permissions.microphone { showOnboarding(); return "Parlo needs microphone access" }
-        if !Permissions.accessibility { showOnboarding(); return "Parlo needs Accessibility access to paste" }
+        if !Permissions.microphone { return "Parlo needs microphone access: menu → Permissions & Setup" }
+        if !Permissions.accessibility { return "Parlo needs Accessibility access to paste: menu → Permissions & Setup" }
         let info = models.activeInfo
         if case let .downloading(p) = models.states[info.id] {
             return "\(info.displayName) is downloading (\(Int(p * 100))%)"
@@ -147,7 +147,6 @@ final class AppController {
         let samples = recorder.stop()
         self.current = nil
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else {
-            current.selection?.cancel()
             phase = .idle
             hud.hide()
             return
@@ -183,6 +182,17 @@ final class AppController {
                 hud.show(.message(error.localizedDescription, isError: true))
             }
         }
+    }
+
+    /// fn was combined with another key (fn+Delete, fn+arrow): drop the recording.
+    private func cancel() {
+        guard phase == .recording else { return }
+        levelTimer?.invalidate()
+        levelTimer = nil
+        _ = recorder.stop()
+        current = nil
+        phase = .idle
+        hud.hide()
     }
 
     private func deliver(_ text: String, warning: String?) async {
