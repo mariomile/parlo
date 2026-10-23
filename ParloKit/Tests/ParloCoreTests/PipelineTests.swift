@@ -48,6 +48,11 @@ import Testing
         #expect(try await p.run(samples: oneSecond, bundleID: nil) == .inserted(text: "open Claude Code at Via Roma 1", cleanupError: nil))
     }
 
+    @Test func spokenLayoutCommands() async throws {
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "Ciao, a capo, come stai?"), llm: nil, settings: settings)
+        #expect(try await p.run(samples: oneSecond, bundleID: nil) == .inserted(text: "Ciao\nCome stai?", cleanupError: nil))
+    }
+
     @Test func llmCleanupWithStyleAndPlaceholders() async throws {
         let llm = FakeLLM { _, user in
             user.replacingOccurrences(of: "<transcript>", with: "").replacingOccurrences(of: "</transcript>", with: "")

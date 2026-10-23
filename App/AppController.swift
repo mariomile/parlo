@@ -26,6 +26,8 @@ final class AppController {
     /// Newest first, as kept on disk.
     private(set) var recent: [HistoryEntry] = []
     private(set) var hotkeyActive = false
+    /// Words the user fixed right after a paste, offered for the dictionary. Newest first.
+    private(set) var suggestions: [DictionaryEntry] = []
     var settingsTab: SettingsTab = .general
     let models: ModelManager
 
@@ -56,6 +58,8 @@ final class AppController {
     private var settingsWindow: NSWindow?
     /// Loaded at launch; until it is, recordings go straight to the transcriber.
     private var speechDetector: SileroSpeechDetector?
+    /// Watches the field after a paste for a fixed word; see `watchForCorrection`.
+    private var correctionWatch: Task<Void, Never>?
 
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
@@ -80,9 +84,18 @@ final class AppController {
         Task {
             await models.refresh()
             models.warmUp()
+            if !settings.hasCompletedOnboarding { await installRecommendedModel() }
         }
         Task { speechDetector = try? await SileroSpeechDetector.load() }
         if !settings.hasCompletedOnboarding || !Permissions.allGranted { showOnboarding() }
+    }
+
+    /// New users start on Apple Speech, which works at once, and switch to Parakeet v3 when it's downloaded.
+    private func installRecommendedModel() async {
+        let id = ModelID.parakeetV3
+        guard models.states[id] == .notInstalled else { return }
+        await models.download(id)
+        if models.states[id] == .installed, models.activeModelID == .appleSpeech { models.select(id) }
     }
 
     /// The event tap can only be created once Input Monitoring is granted; retry until it is.
@@ -149,6 +162,7 @@ final class AppController {
         let previous = stopping != nil ? stopRecording() : nil
         defer { if let previous { save(previous) } }
         guard recording == nil else { return }
+        correctionWatch?.cancel()
         if let problem = blocker(command: command) {
             hud.show(.message(problem, isError: true))
             return
@@ -264,23 +278,32 @@ final class AppController {
     }
 
     private func process(_ samples: [Float], _ rec: Recording, entryID: String?) async {
+        let limit = Deadline.forAudio(duration: Double(samples.count) / 16_000)
         do {
             let transcriber = try await models.transcriber()
             if rec.command {
                 let selection = await rec.selection?.value
-                let outcome = try await CommandPipeline(
+                if let entryID, let selection { history.update(entryID, status: .processing, text: nil, selection: selection) }
+                let pipeline = CommandPipeline(
                     transcriber: transcriber, llm: llm, languageCode: settings.languageCode,
                     speech: speechDetector
-                ).run(samples: samples, selection: selection)
+                )
+                let outcome = try await Deadline.run(seconds: limit) {
+                    try await pipeline.run(samples: samples, selection: selection)
+                }
                 switch outcome {
                 case .discarded: record(entryID, .nothingHeard); show(nil)
                 case .empty: record(entryID, .nothingHeard); show(.message(nothingHeard(entryID), isError: false))
                 case let .result(text): record(entryID, .done, text); await deliver(text, warning: nil)
                 }
             } else {
-                let outcome = try await DictationPipeline(
+                let pipeline = DictationPipeline(
                     transcriber: transcriber, llm: llm, settings: settings, speech: speechDetector
-                ).run(samples: samples, bundleID: rec.bundleID)
+                )
+                let bundleID = rec.bundleID
+                let outcome = try await Deadline.run(seconds: limit) {
+                    try await pipeline.run(samples: samples, bundleID: bundleID)
+                }
                 switch outcome {
                 case .discarded: record(entryID, .nothingHeard); show(nil)
                 case .empty: record(entryID, .nothingHeard); show(.message(nothingHeard(entryID), isError: false))
@@ -290,6 +313,7 @@ final class AppController {
                 }
             }
         } catch {
+            if error is DeadlineExceeded { models.reload() }
             record(entryID, .failed(error.localizedDescription))
             let kept = entryID == nil ? "" : ". The audio is kept in Recent."
             show(.message(error.localizedDescription + kept, isError: true))
@@ -301,17 +325,31 @@ final class AppController {
     }
 
     /// Transcribes a saved recording again, without the speech check, and copies the result.
+    /// A command is applied again to the text it was first applied to.
     func retry(_ entry: HistoryEntry) {
         guard let samples = history.samples(entry.id) else { return }
         record(entry.id, .processing)
-        show(.processing(command: false))
+        show(.processing(command: entry.command))
+        let limit = Deadline.forAudio(duration: entry.duration)
         enqueue { [weak self] in
             guard let self else { return }
             do {
                 let transcriber = try await models.transcriber()
-                let outcome = try await DictationPipeline(transcriber: transcriber, llm: llm, settings: settings)
-                    .run(samples: samples, bundleID: nil)
-                guard case let .inserted(text, _) = outcome else {
+                let text: String?
+                if entry.command {
+                    let pipeline = CommandPipeline(transcriber: transcriber, llm: llm, languageCode: settings.languageCode)
+                    let outcome = try await Deadline.run(seconds: limit) {
+                        try await pipeline.run(samples: samples, selection: entry.selection)
+                    }
+                    if case let .result(result) = outcome { text = result } else { text = nil }
+                } else {
+                    let pipeline = DictationPipeline(transcriber: transcriber, llm: llm, settings: settings)
+                    let outcome = try await Deadline.run(seconds: limit) {
+                        try await pipeline.run(samples: samples, bundleID: nil)
+                    }
+                    if case let .inserted(result, _) = outcome { text = result } else { text = nil }
+                }
+                guard let text else {
                     record(entry.id, .nothingHeard)
                     show(.message("Still nothing heard in that recording", isError: false))
                     return
@@ -320,6 +358,7 @@ final class AppController {
                 copy(text)
                 show(.message("Copied: press ⌘V to paste", isError: false))
             } catch {
+                if error is DeadlineExceeded { models.reload() }
                 record(entry.id, .failed(error.localizedDescription))
                 show(.message(error.localizedDescription, isError: true))
             }
@@ -360,9 +399,53 @@ final class AppController {
         phase = recording != nil ? .recording : pendingJobs > 0 ? .processing : .idle
     }
 
+    /// Pastes into the focused field. With no field to paste into, the text stays on the clipboard instead.
     private func deliver(_ text: String, warning: String?) async {
+        let target = FocusedElement.current()
+        guard PasteTarget.acceptsText(target.focus) else {
+            copy(text)
+            show(.message("No text field to paste into. Copied: press ⌘V to paste", isError: false))
+            return
+        }
         await TextInserter.insert(text)
         show(warning.map { .message($0, isError: true) } ?? .done)
+        if let element = target.element { watchForCorrection(of: text, in: element) }
+    }
+
+    // MARK: - Dictionary suggestions
+
+    /// Reads the field again every 2 s for 30 s, while it keeps focus and until the next dictation,
+    /// and offers a word the user fixed as a dictionary entry.
+    private func watchForCorrection(of pasted: String, in element: AXUIElement) {
+        correctionWatch?.cancel()
+        guard let before = FocusedElement.text(element), before.contains(pasted) else { return }
+        correctionWatch = Task { [weak self] in
+            var latest = before
+            for _ in 0..<15 {
+                do { try await Task.sleep(for: .seconds(2)) } catch { break }
+                guard FocusedElement.isFocused(element), let text = FocusedElement.text(element) else { break }
+                latest = text
+            }
+            if let entry = CorrectionDetector.suggestion(pasted: pasted, before: before, after: latest) {
+                self?.suggest(entry)
+            }
+        }
+    }
+
+    private func suggest(_ entry: DictionaryEntry) {
+        let known = settings.dictionary.map { $0.term.lowercased() } + suggestions.map { $0.term.lowercased() }
+        guard !known.contains(entry.term.lowercased()) else { return }
+        suggestions.insert(entry, at: 0)
+        show(.message("Add “\(entry.term)” to your dictionary? It's in Parlo's menu", isError: false))
+    }
+
+    func acceptSuggestion(_ entry: DictionaryEntry) {
+        suggestions.removeAll { $0.id == entry.id }
+        settings.dictionary.append(entry)
+    }
+
+    func dismissSuggestion(_ entry: DictionaryEntry) {
+        suggestions.removeAll { $0.id == entry.id }
     }
 
     // MARK: - Windows
@@ -416,7 +499,8 @@ final class AppController {
         }
     }
 
-    func finishOnboarding() {
+    func finishOnboarding(openAtLogin: Bool) {
+        if openAtLogin != LoginItem.isEnabled { try? LoginItem.set(openAtLogin) }
         settings.hasCompletedOnboarding = true
         onboardingWindow?.close()
     }

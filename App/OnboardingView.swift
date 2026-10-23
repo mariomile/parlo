@@ -8,6 +8,7 @@ struct OnboardingView: View {
     @State private var mic = Permissions.microphone
     @State private var accessibility = Permissions.accessibility
     @State private var inputMonitoring = Permissions.inputMonitoring
+    @State private var openAtLogin = true
     private let poll = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -56,8 +57,9 @@ struct OnboardingView: View {
             }
 
             HStack {
+                Toggle("Open Parlo at login", isOn: $openAtLogin)
                 Spacer()
-                Button("Done") { controller.finishOnboarding() }
+                Button("Done") { controller.finishOnboarding(openAtLogin: openAtLogin) }
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -102,11 +104,19 @@ private struct ModelOffer: View {
         HStack {
             VStack(alignment: .leading) {
                 Text("\(info.displayName) (recommended)")
-                Text("Active: \(models.activeInfo.displayName). \(info.sizeLabel) download, works offline.")
+                Text(caption(models))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             ModelActions(models: models, id: id)
         }
+    }
+
+    private func caption(_ models: ModelManager) -> String {
+        let info = ModelCatalog.info(id)
+        if case .downloading = models.states[id] {
+            return "Downloading \(info.sizeLabel). Until it's ready Parlo uses \(models.activeInfo.displayName), so you can dictate now."
+        }
+        return "Active: \(models.activeInfo.displayName). \(info.sizeLabel) download, works offline."
     }
 }

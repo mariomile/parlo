@@ -53,6 +53,9 @@ private struct GeneralTab: View {
                         .foregroundStyle(.orange)
                 }
             }
+            Section("Startup") {
+                LoginItemToggle()
+            }
             Section("Permissions") {
                 PermissionStatus(title: "Microphone", granted: Permissions.microphone, pane: .microphone)
                 PermissionStatus(title: "Accessibility", granted: Permissions.accessibility, pane: .accessibility)
@@ -61,6 +64,26 @@ private struct GeneralTab: View {
         }
         .formStyle(.grouped)
         .onAppear { devices = AudioDevices.inputDevices() }
+    }
+}
+
+private struct LoginItemToggle: View {
+    @State private var enabled = LoginItem.isEnabled
+    @State private var error: String?
+
+    var body: some View {
+        Toggle("Open at login", isOn: $enabled)
+            .onChange(of: enabled) { _, on in
+                do { try LoginItem.set(on); error = nil } catch { self.error = error.localizedDescription }
+            }
+        if LoginItem.needsApproval {
+            LabeledContent("Allow Parlo in Login Items to finish") {
+                Button("Open Settings") { LoginItem.openSystemSettings() }
+            }
+        }
+        if let error {
+            Text(error).font(.caption).foregroundStyle(.red)
+        }
     }
 }
 

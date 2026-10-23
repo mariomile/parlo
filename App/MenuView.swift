@@ -18,6 +18,10 @@ struct MenuView: View {
                 aiRow
             }
             .padding(6)
+            if !controller.suggestions.isEmpty {
+                Divider().opacity(0.5)
+                suggestionsSection
+            }
             if !controller.recent.isEmpty {
                 Divider().opacity(0.5)
                 recentSection
@@ -115,6 +119,27 @@ struct MenuView: View {
         }
         .buttonStyle(PressableStyle())
         .padding(.bottom, 4)
+    }
+
+    // MARK: Dictionary suggestions
+
+    private var suggestionsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("ADD TO DICTIONARY?")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 8)
+            ForEach(controller.suggestions.prefix(3)) { entry in
+                SuggestionRow(
+                    entry: entry,
+                    add: { controller.acceptSuggestion(entry) },
+                    dismiss: { controller.dismissSuggestion(entry) }
+                )
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 10)
     }
 
     // MARK: Recent
@@ -217,6 +242,31 @@ private struct Row<Accessory: View>: View {
         .padding(.vertical, 6)
         .background(hovering ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .onHover { hovering = $0 }
+    }
+}
+
+/// A word the user fixed after a paste, offered as a dictionary entry.
+private struct SuggestionRow: View {
+    let entry: DictionaryEntry
+    let add: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.term).font(.system(size: 12.5, weight: .medium))
+                Text(entry.heardAs.isEmpty ? "Spelling you used" : "Heard as “\(entry.heardAs.joined(separator: ", "))”")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Add", action: add).controlSize(.small)
+            Button(action: dismiss) { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .help("Not this one")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
     }
 }
 

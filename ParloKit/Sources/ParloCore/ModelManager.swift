@@ -100,6 +100,12 @@ public final class ModelManager {
         }
     }
 
+    /// Drops the loaded model and loads it again, after it stopped answering.
+    public func reload() {
+        cached = nil
+        warmUp()
+    }
+
     /// Loads the active model in the background so the first dictation is fast.
     public func warmUp() {
         Task { _ = try? await transcriber() }

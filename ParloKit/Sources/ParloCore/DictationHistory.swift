@@ -15,6 +15,8 @@ public struct HistoryEntry: Codable, Equatable, Identifiable, Sendable {
     public let command: Bool
     public var status: Status
     public var text: String?
+    /// The text a command was applied to, so Retry can apply it again.
+    public var selection: String?
 }
 
 /// The last `limit` recordings on disk: 16 kHz mono float WAV plus a JSON index.
@@ -61,11 +63,12 @@ public final class DictationHistory: Sendable {
         return entry
     }
 
-    public func update(_ id: String, status: HistoryEntry.Status, text: String?) {
+    public func update(_ id: String, status: HistoryEntry.Status, text: String?, selection: String? = nil) {
         var all = entries()
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].status = status
         if let text { all[i].text = text }
+        if let selection { all[i].selection = selection }
         try? save(all)
     }
 

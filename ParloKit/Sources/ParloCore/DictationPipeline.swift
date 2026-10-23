@@ -7,7 +7,7 @@ public enum DictationOutcome: Equatable, Sendable {
     case inserted(text: String, cleanupError: String?)
 }
 
-/// transcribe -> dictionary -> snippet tokens -> LLM cleanup -> expand snippets.
+/// transcribe -> dictionary -> spoken layout -> snippet tokens -> LLM cleanup -> expand snippets.
 public struct DictationPipeline: Sendable {
     public static let cleanupTimeout: TimeInterval = 5
 
@@ -35,7 +35,7 @@ public struct DictationPipeline: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return .empty }
 
-        let replaced = DictionaryReplacer.apply(raw, entries: settings.dictionary)
+        let replaced = VoiceFormatting.apply(DictionaryReplacer.apply(raw, entries: settings.dictionary))
         let (encoded, used) = SnippetCodec.encode(replaced, snippets: settings.snippets)
         let uncleaned = SnippetCodec.decode(encoded, used: used)
 
