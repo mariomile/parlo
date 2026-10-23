@@ -3,7 +3,7 @@ public enum ModelID: String, Codable, CaseIterable, Sendable {
     case parakeetV3, parakeetUltra, parakeetRedux, parakeetV2
     case cohereTranscribe
     case nemotronMultilingual
-    case whisperTiny, whisperBase, whisperSmall, whisperLargeV3Turbo
+    case whisperTiny, whisperBase, whisperSmall, whisperLargeV3TurboCompact, whisperLargeV3, whisperLargeV3Turbo
 }
 
 public enum Engine: String, Sendable {
@@ -16,6 +16,11 @@ public struct ModelInfo: Identifiable, Sendable {
     public let engine: Engine
     public let approxSizeMB: Int
     public let languages: String
+    /// 1 (poor) to 5 (best), from published benchmarks and measurements on Apple Silicon; 0 = not supported.
+    public let italian: Int
+    public let english: Int
+    /// 1 (several seconds per sentence) to 5 (instant).
+    public let speed: Int
     public let note: String
     /// Cohere can't auto-detect: dictation needs a language set in Settings.
     public let requiresExplicitLanguage: Bool
@@ -32,37 +37,43 @@ public struct ModelInfo: Identifiable, Sendable {
 public enum ModelCatalog {
     public static let all: [ModelInfo] = [
         ModelInfo(id: .appleSpeech, displayName: "Apple Speech", engine: .apple, approxSizeMB: 0,
-                  languages: "Italian, English and many more", note: "Built into macOS. Language assets install on first use.",
+                  languages: "Italian, English and many more", italian: 3, english: 3, speed: 4, note: "Built into macOS. Language assets install on first use.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .parakeetV3, displayName: "Parakeet TDT v3", engine: .parakeet, approxSizeMB: 600,
-                  languages: "25 European languages incl. Italian, auto-detect", note: "Recommended. Fast and accurate.",
+        ModelInfo(id: .parakeetV3, displayName: "Parakeet TDT v3", engine: .parakeet, approxSizeMB: 461,
+                  languages: "25 European languages incl. Italian, auto-detect", italian: 4, english: 4, speed: 5, note: "Recommended. Fast and accurate.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .parakeetUltra, displayName: "Parakeet Ultra", engine: .parakeet, approxSizeMB: 600,
-                  languages: "25 European languages incl. Italian", note: "Higher accuracy than v3.",
+        ModelInfo(id: .parakeetUltra, displayName: "Parakeet Ultra", engine: .parakeet, approxSizeMB: 632,
+                  languages: "25 European languages incl. Italian", italian: 5, english: 5, speed: 5, note: "Higher accuracy than v3.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .parakeetRedux, displayName: "Parakeet Redux", engine: .parakeet, approxSizeMB: 220,
-                  languages: "Multilingual", note: "Lightest Parakeet.",
+        ModelInfo(id: .parakeetRedux, displayName: "Parakeet Redux", engine: .parakeet, approxSizeMB: 215,
+                  languages: "25 European languages incl. Italian", italian: 3, english: 4, speed: 5, note: "Lightest Parakeet, slightly less accurate.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .parakeetV2, displayName: "Parakeet TDT v2", engine: .parakeet, approxSizeMB: 600,
-                  languages: "English only", note: "Best English accuracy.",
+        ModelInfo(id: .parakeetV2, displayName: "Parakeet TDT v2", engine: .parakeet, approxSizeMB: 443,
+                  languages: "English only", italian: 0, english: 4, speed: 5, note: "Best English accuracy.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .cohereTranscribe, displayName: "Cohere Transcribe", engine: .cohere, approxSizeMB: 1800,
-                  languages: "14 languages incl. Italian", note: "Top accuracy. Set the language in General.",
+        ModelInfo(id: .cohereTranscribe, displayName: "Cohere Transcribe", engine: .cohere, approxSizeMB: 2200,
+                  languages: "14 languages incl. Italian", italian: 1, english: 4, speed: 1, note: "Slow, and garbled most Italian sentences in our tests. Set the language in General.",
                   requiresExplicitLanguage: true),
-        ModelInfo(id: .nemotronMultilingual, displayName: "Nemotron Speech Multilingual", engine: .nemotron, approxSizeMB: 600,
-                  languages: "en, es, fr, it, pt, de, zh, ja", note: "NVIDIA multilingual model.",
+        ModelInfo(id: .nemotronMultilingual, displayName: "Nemotron Speech Multilingual", engine: .nemotron, approxSizeMB: 610,
+                  languages: "en, es, fr, it, pt, de, zh, ja", italian: 2, english: 2, speed: 4, note: "NVIDIA multilingual model.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .whisperTiny, displayName: "Whisper Tiny", engine: .whisperKit, approxSizeMB: 75,
-                  languages: "99 languages", note: "Fastest Whisper, lowest accuracy.",
+        ModelInfo(id: .whisperTiny, displayName: "Whisper Tiny", engine: .whisperKit, approxSizeMB: 77,
+                  languages: "99 languages", italian: 1, english: 2, speed: 5, note: "Fastest Whisper, lowest accuracy.",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .whisperBase, displayName: "Whisper Base", engine: .whisperKit, approxSizeMB: 145,
-                  languages: "99 languages", note: "",
+        ModelInfo(id: .whisperBase, displayName: "Whisper Base", engine: .whisperKit, approxSizeMB: 147,
+                  languages: "99 languages", italian: 1, english: 2, speed: 5, note: "",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .whisperSmall, displayName: "Whisper Small", engine: .whisperKit, approxSizeMB: 480,
-                  languages: "99 languages", note: "",
+        ModelInfo(id: .whisperSmall, displayName: "Whisper Small", engine: .whisperKit, approxSizeMB: 486,
+                  languages: "99 languages", italian: 2, english: 3, speed: 4, note: "",
                   requiresExplicitLanguage: false),
-        ModelInfo(id: .whisperLargeV3Turbo, displayName: "Whisper Large v3 Turbo", engine: .whisperKit, approxSizeMB: 1600,
-                  languages: "99 languages", note: "Widest language coverage, slower.",
+        ModelInfo(id: .whisperLargeV3TurboCompact, displayName: "Whisper Large v3 Turbo (compact)", engine: .whisperKit,
+                  approxSizeMB: 646, languages: "99 languages", italian: 4, english: 4, speed: 3, note: "Turbo compressed to a third of the size, same accuracy in our tests.",
+                  requiresExplicitLanguage: false),
+        ModelInfo(id: .whisperLargeV3, displayName: "Whisper Large v3", engine: .whisperKit, approxSizeMB: 948,
+                  languages: "99 languages", italian: 4, english: 3, speed: 2, note: "Most accurate Whisper on Italian.",
+                  requiresExplicitLanguage: false),
+        ModelInfo(id: .whisperLargeV3Turbo, displayName: "Whisper Large v3 Turbo", engine: .whisperKit, approxSizeMB: 1638,
+                  languages: "99 languages", italian: 4, english: 4, speed: 3, note: "Widest language coverage.",
                   requiresExplicitLanguage: false),
     ]
 

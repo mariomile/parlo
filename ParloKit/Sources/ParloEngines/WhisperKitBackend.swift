@@ -15,6 +15,8 @@ enum WhisperKitBackend {
         case .whisperTiny: "openai_whisper-tiny"
         case .whisperBase: "openai_whisper-base"
         case .whisperSmall: "openai_whisper-small"
+        case .whisperLargeV3: "openai_whisper-large-v3_947MB"
+        case .whisperLargeV3TurboCompact: "openai_whisper-large-v3-v20240930_turbo_632MB"
         default: "openai_whisper-large-v3-v20240930_turbo"
         }
     }

@@ -84,20 +84,132 @@ private struct PermissionStatus: View {
 
 private struct ModelsTab: View {
     let models: ModelManager
+    @State private var stored: [StoredFiles] = []
+    @State private var pendingDelete: StoredFiles?
+    @State private var deleteError: String?
+
+    private var installedIDs: Set<ModelID> {
+        Set(models.states.filter { $0.value == .installed }.keys)
+    }
 
     var body: some View {
         Form {
             Section {
+                if stored.isEmpty {
+                    Text("Nothing downloaded yet.").foregroundStyle(.secondary)
+                }
+                ForEach(stored) { item in
+                    StoredRow(item: item, active: isActive(item)) { pendingDelete = item }
+                }
+            } header: {
+                HStack {
+                    Text("On this Mac")
+                    Spacer()
+                    Text("\(bytes(stored.reduce(0) { $0 + $1.bytes })) used").monospacedDigit()
+                }
+            } footer: {
+                if let deleteError {
+                    Text(deleteError).font(.caption).foregroundStyle(.red)
+                }
+            }
+            Section {
                 ForEach(ModelCatalog.all) { info in
                     ModelRow(models: models, info: info)
                 }
+            } header: {
+                Text("All models")
             } footer: {
-                Text("Parakeet, Cohere and Nemotron models are stored in FluidAudio's shared folder, also used by FluidVoice. Deleting one here deletes it for FluidVoice too.")
+                Text("Ratings come from public benchmarks (Open ASR Leaderboard, model cards) and tests on Apple Silicon. Parakeet, Cohere and Nemotron models are stored in FluidAudio's shared folder, also used by FluidVoice. Deleting one here deletes it for FluidVoice too.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .task { await models.refresh() }
+        .task {
+            await models.refresh()
+            await rescan()
+        }
+        .onChange(of: installedIDs) { Task { await rescan() } }
+        .confirmationDialog(
+            "Delete \(pendingDelete?.name ?? "")?",
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            presenting: pendingDelete
+        ) { item in
+            Button("Delete \(bytes(item.bytes))", role: .destructive) { delete(item) }
+        } message: { item in
+            Text(deleteMessage(item))
+        }
+    }
+
+    private func isActive(_ item: StoredFiles) -> Bool {
+        if case let .model(id) = item.kind { return id == models.activeModelID }
+        return false
+    }
+
+    private func deleteMessage(_ item: StoredFiles) -> String {
+        switch item.kind {
+        case .model:
+            isActive(item)
+                ? "Parlo switches to Apple Speech. You can download it again from the list below."
+                : "You can download it again from the list below."
+        case .vocabulary: "It downloads again the next time you dictate with Parakeet and have dictionary words."
+        case .voiceDetection: "It downloads again on the next dictation."
+        case .other: "Parlo doesn't use these files. If FluidVoice needs them, it downloads them again."
+        }
+    }
+
+    private func delete(_ item: StoredFiles) {
+        Task {
+            if case let .model(id) = item.kind { await models.delete(id) }
+            do {
+                try ModelStorage.delete(item)
+                deleteError = nil
+            } catch {
+                deleteError = "Couldn't delete \(item.name): \(error.localizedDescription)"
+            }
+            await rescan()
+        }
+    }
+
+    private func rescan() async {
+        stored = await Task.detached { ModelStorage.scan() }.value
+    }
+}
+
+private func bytes(_ count: Int64) -> String {
+    ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
+}
+
+/// One downloaded folder: what it is, its size on disk, and a delete button.
+private struct StoredRow: View {
+    let item: StoredFiles
+    let active: Bool
+    let onDelete: () -> Void
+
+    private var detail: String {
+        switch item.kind {
+        case .model: active ? "Voice model, in use" : "Voice model"
+        case .vocabulary: "Recognises your dictionary words with Parakeet"
+        case .voiceDetection: "Needed for every dictation"
+        case .other: "Not used by Parlo. May belong to FluidVoice or an old download."
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name).fontWeight(.medium)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(bytes(item.bytes)).monospacedDigit().foregroundStyle(.secondary)
+            if case .voiceDetection = item.kind {
+                Image(systemName: "trash").foregroundStyle(.quaternary).help("Needed for dictation")
+            } else {
+                Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
+                    .help("Delete these files")
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -116,6 +228,12 @@ private struct ModelRow: View {
                             .background(.tint.opacity(0.2), in: Capsule())
                     }
                 }
+                HStack(spacing: 12) {
+                    Rating(label: "Italian", value: info.italian)
+                    Rating(label: "English", value: info.english)
+                    Rating(label: "Speed", value: info.speed)
+                }
+                .padding(.vertical, 2)
                 Text("\(info.sizeLabel) · \(info.languages)").font(.caption).foregroundStyle(.secondary)
                 if !info.note.isEmpty { Text(info.note).font(.caption).foregroundStyle(.secondary) }
                 if case let .failed(message) = models.states[info.id] {
@@ -126,6 +244,31 @@ private struct ModelRow: View {
             ModelActions(models: models, id: info.id)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// Five dots, or "No" when the model doesn't understand that language.
+private struct Rating: View {
+    let label: String
+    let value: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            if value == 0 {
+                Text("No").font(.caption).foregroundStyle(.tertiary)
+            } else {
+                HStack(spacing: 2) {
+                    ForEach(1...5, id: \.self) { i in
+                        Circle()
+                            .fill(i <= value ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
+                            .frame(width: 6, height: 6)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(value == 0 ? "\(label): not supported" : "\(label): \(value) out of 5")
     }
 }
 

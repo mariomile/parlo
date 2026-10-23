@@ -26,15 +26,19 @@ public struct EngineInstaller: ModelInstaller {
     }
 
     public func uninstall(_ id: ModelID) async throws {
-        let dir: URL? = switch ModelCatalog.info(id).engine {
+        if let dir = Self.directory(id), FileManager.default.fileExists(atPath: dir.path) {
+            try FileManager.default.removeItem(at: dir)
+        }
+    }
+
+    /// Where a model's files live; nil for models macOS manages.
+    static func directory(_ id: ModelID) -> URL? {
+        switch ModelCatalog.info(id).engine {
         case .apple: nil
         case .parakeet: ParakeetBackend.directory(id)
         case .cohere: CohereBackend.directory
         case .nemotron: NemotronBackend.directory
         case .whisperKit: WhisperKitBackend.directory(id)
-        }
-        if let dir, FileManager.default.fileExists(atPath: dir.path) {
-            try FileManager.default.removeItem(at: dir)
         }
     }
 
