@@ -11,6 +11,8 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.17.7"),
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", exact: "1.1.1"),
+        .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", exact: "0.1.6"),
+        .package(url: "https://github.com/huggingface/swift-huggingface.git", exact: "0.13.0"),
     ],
     targets: [
         .target(name: "ParloCore"),
@@ -20,6 +22,8 @@ let package = Package(
                 "ParloCore",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
+                .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
             ]
         ),
         .testTarget(name: "ParloCoreTests", dependencies: ["ParloCore"]),
