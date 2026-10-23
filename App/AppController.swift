@@ -76,11 +76,16 @@ final class AppController {
 
     /// Cleanup is on but a cloud provider has no key yet, so every call would fail.
     var aiNeedsKey: Bool {
-        settings.llm.enabled && apiKey == nil && !settings.llm.baseURL.contains("localhost")
+        settings.llm.enabled && settings.llm.provider == .openAICompatible
+            && apiKey == nil && !settings.llm.baseURL.contains("localhost")
     }
 
     var llm: (any ChatCompleting)? {
-        settings.llm.enabled ? LLMClient(settings: settings.llm, apiKey: apiKey) : nil
+        guard settings.llm.enabled else { return nil }
+        return switch settings.llm.provider {
+        case .apple: AppleIntelligenceClient()
+        case .openAICompatible: LLMClient(settings: settings.llm, apiKey: apiKey)
+        }
     }
 
     var statusText: String {

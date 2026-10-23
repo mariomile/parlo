@@ -40,7 +40,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         c.protocolClasses = [StubProtocol.self]
         return URLSession(configuration: c)
     }
-    let settings = LLMSettings(enabled: true, baseURL: "https://api.example.com/v1/", model: "m1")
+    let settings = LLMSettings(enabled: true, provider: .openAICompatible, baseURL: "https://api.example.com/v1/", model: "m1")
 
     @Test func sendsRequestAndParses() async throws {
         StubProtocol.handler = { _ in (200, Data(#"{"choices":[{"message":{"content":"  Ciao.  "}}]}"#.utf8)) }

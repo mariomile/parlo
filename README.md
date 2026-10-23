@@ -3,7 +3,7 @@
 Voice dictation for macOS, in the style of FluidVoice and Wispr Flow. Hold **fn**, speak, release: Parlo transcribes on this Mac, optionally cleans the text up with an LLM, and pastes it into whatever field has focus, in any app.
 
 - **Local transcription** with a downloadable model catalog: Apple Speech (built in), Parakeet v3 / Ultra / Redux / v2, Cohere Transcribe, Nemotron Multilingual, Whisper tiny → large-v3-turbo.
-- **AI cleanup** (optional) over any OpenAI-compatible endpoint: Groq, OpenAI, OpenRouter, local Ollama. Removes fillers, fixes punctuation and self-corrections.
+- **AI cleanup** (optional) with Apple Intelligence on-device, or any OpenAI-compatible endpoint: Groq, OpenAI, OpenRouter, local Ollama. Removes fillers, fixes punctuation and self-corrections.
 - **Per-app tone**: formal in Mail, casual in Slack, technical in Cursor/Xcode/Terminal. Editable.
 - **Personal dictionary**: "heard as → write as" replacements, plus terms the AI must spell exactly.
 - **Voice snippets**: say a trigger phrase, get saved text, alone or mid-sentence.
@@ -50,7 +50,7 @@ Settings → Models: download, cancel, delete, and pick the active one.
 
 ## AI cleanup
 
-Settings → AI: turn it on, pick a provider preset (or a custom OpenAI-compatible URL), set the model and API key, then **Test connection**. The key is stored in the macOS keychain. If the AI call fails or times out (5 s), Parlo pastes the raw transcript and says so: a dictation is never lost.
+Settings → AI (or **AI Cleanup** in the menu bar): turn it on and pick a provider. **Apple Intelligence** is the default: it runs on the Mac with no key, once Apple Intelligence is on in System Settings and its model has finished downloading. For a cloud or Ollama provider, pick a preset (or a custom OpenAI-compatible URL), set the model and API key, then **Test connection**. The key is stored in the macOS keychain. If the AI call fails or times out (5 s), Parlo pastes the raw transcript and says so: a dictation is never lost.
 
 ## Data
 

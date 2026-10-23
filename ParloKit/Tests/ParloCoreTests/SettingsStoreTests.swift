@@ -19,7 +19,7 @@ import Testing
         var s = AppSettings.default
         s.activeModelID = .parakeetV3
         s.languageCode = "it"
-        s.llm = LLMSettings(enabled: true, baseURL: "http://localhost:11434/v1", model: "llama3")
+        s.llm = LLMSettings(enabled: true, provider: .openAICompatible, baseURL: "http://localhost:11434/v1", model: "llama3")
         s.styleOverrides = ["com.foo": .technical]
         s.dictionary = [DictionaryEntry(term: "Claude Code", heardAs: ["cloud code"])]
         s.snippets = [Snippet(trigger: "my address", text: "Via Roma 1")]

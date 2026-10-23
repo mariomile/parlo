@@ -38,19 +38,30 @@ public struct Snippet: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public enum LLMProvider: String, Codable, Sendable {
+    /// Apple Intelligence's on-device model: no key, nothing leaves the Mac.
+    case apple
+    /// Any `/chat/completions` endpoint: Groq, OpenAI, OpenRouter, Ollama.
+    case openAICompatible
+}
+
 public struct LLMSettings: Codable, Equatable, Sendable {
     public var enabled: Bool
+    public var provider: LLMProvider
+    /// `baseURL` and `model` apply to `.openAICompatible` only.
     public var baseURL: String
     public var model: String
 
-    public init(enabled: Bool, baseURL: String, model: String) {
+    public init(enabled: Bool, provider: LLMProvider, baseURL: String, model: String) {
         self.enabled = enabled
+        self.provider = provider
         self.baseURL = baseURL
         self.model = model
     }
 
-    public static let groqDefault = LLMSettings(
+    public static let `default` = LLMSettings(
         enabled: false,
+        provider: .apple,
         baseURL: "https://api.groq.com/openai/v1",
         model: "llama-3.3-70b-versatile"
     )
@@ -72,7 +83,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public static let `default` = AppSettings(
         activeModelID: .appleSpeech,
         languageCode: nil,
-        llm: .groqDefault,
+        llm: .default,
         styleOverrides: [:],
         dictionary: [],
         snippets: [],

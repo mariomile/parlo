@@ -1,5 +1,7 @@
 import AppKit
+import Combine
 import ParloCore
+import ParloEngines
 import SwiftUI
 
 enum SettingsTab: Hashable { case general, models, ai, styles, dictionary, snippets }
@@ -178,6 +180,10 @@ private struct AITab: View {
     @State private var key = ""
     @State private var testResult: (ok: Bool, text: String)?
     @State private var testing = false
+    @State private var appleStatus = AppleIntelligenceClient.unavailableReason
+
+    private static let apple = "Apple Intelligence"
+    private var llm: LLMSettings { controller.settings.llm }
 
     var body: some View {
         Form {
@@ -187,18 +193,24 @@ private struct AITab: View {
                 Text("Removes filler words, fixes punctuation and self-corrections, adapts tone per app. Also required for command mode. Without it, Parlo pastes the raw transcript.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Provider (OpenAI-compatible)") {
-                Picker("Preset", selection: presetBinding) {
-                    Text("Custom").tag("Custom")
+            Section {
+                Picker("Provider", selection: providerBinding) {
+                    Text("Apple Intelligence (on-device)").tag(Self.apple)
+                    Divider()
                     ForEach(providers) { Text($0.name).tag($0.name) }
+                    Text("Custom (OpenAI-compatible)").tag("Custom")
                 }
-                TextField("Base URL", text: $controller.settings.llm.baseURL)
-                TextField("Model", text: $controller.settings.llm.model)
-                LabeledContent("API key") {
-                    HStack {
-                        SecureField("Not set", text: $key).frame(maxWidth: 260)
-                        Button("Save") { controller.apiKey = key.isEmpty ? nil : key }
-                            .disabled(key == (controller.apiKey ?? ""))
+                if llm.provider == .apple {
+                    appleRows
+                } else {
+                    TextField("Base URL", text: $controller.settings.llm.baseURL)
+                    TextField("Model", text: $controller.settings.llm.model)
+                    LabeledContent("API key") {
+                        HStack {
+                            SecureField("Not set", text: $key).frame(maxWidth: 260)
+                            Button("Save") { controller.apiKey = key.isEmpty ? nil : key }
+                                .disabled(key == (controller.apiKey ?? ""))
+                        }
                     }
                 }
                 HStack {
@@ -212,12 +224,41 @@ private struct AITab: View {
         }
         .formStyle(.grouped)
         .onAppear { key = controller.apiKey ?? "" }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            appleStatus = AppleIntelligenceClient.unavailableReason
+        }
     }
 
-    private var presetBinding: Binding<String> {
+    @ViewBuilder private var appleRows: some View {
+        if let appleStatus {
+            LabeledContent("Status") {
+                HStack {
+                    Label(appleStatus, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Button("Open Settings") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension")!)
+                    }
+                }
+            }
+        } else {
+            LabeledContent("Status") {
+                Label("Ready. Runs on this Mac, no key needed.", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            }
+        }
+    }
+
+    private var providerBinding: Binding<String> {
         Binding(
-            get: { providers.first { $0.baseURL == controller.settings.llm.baseURL }?.name ?? "Custom" },
+            get: {
+                if llm.provider == .apple { return Self.apple }
+                return providers.first { $0.baseURL == llm.baseURL }?.name ?? "Custom"
+            },
             set: { name in
+                testResult = nil
+                if name == Self.apple {
+                    controller.settings.llm.provider = .apple
+                    return
+                }
+                controller.settings.llm.provider = .openAICompatible
                 guard let p = providers.first(where: { $0.name == name }) else { return }
                 controller.settings.llm.baseURL = p.baseURL
                 controller.settings.llm.model = p.model
@@ -228,7 +269,9 @@ private struct AITab: View {
     private func test() {
         testing = true
         testResult = nil
-        let client = LLMClient(settings: controller.settings.llm, apiKey: key.isEmpty ? nil : key)
+        let client: any ChatCompleting = llm.provider == .apple
+            ? AppleIntelligenceClient()
+            : LLMClient(settings: llm, apiKey: key.isEmpty ? nil : key)
         Task {
             do {
                 let reply = try await client.complete(system: "Reply with the single word OK.", user: "ping", timeout: 10)
