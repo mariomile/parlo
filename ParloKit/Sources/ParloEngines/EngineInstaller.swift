@@ -11,6 +11,7 @@ public struct EngineInstaller: ModelInstaller {
         case .parakeet: ParakeetBackend.isInstalled(id)
         case .cohere: CohereBackend.isInstalled
         case .nemotron: NemotronBackend.isInstalled
+        case .qwen3ASR: Qwen3ASRBackend.isInstalled
         case .whisperKit: WhisperKitBackend.isInstalled(id)
         }
     }
@@ -21,6 +22,7 @@ public struct EngineInstaller: ModelInstaller {
         case .parakeet: try await ParakeetBackend.install(id, progress: progress)
         case .cohere: try await CohereBackend.install(progress: progress)
         case .nemotron: try await NemotronBackend.install(progress: progress)
+        case .qwen3ASR: try await Qwen3ASRBackend.install(progress: progress)
         case .whisperKit: try await WhisperKitBackend.install(id, progress: progress)
         }
     }
@@ -38,6 +40,7 @@ public struct EngineInstaller: ModelInstaller {
         case .parakeet: ParakeetBackend.directory(id)
         case .cohere: CohereBackend.directory
         case .nemotron: NemotronBackend.directory
+        case .qwen3ASR: Qwen3ASRBackend.directory
         case .whisperKit: WhisperKitBackend.directory(id)
         }
     }
@@ -51,6 +54,7 @@ public struct EngineInstaller: ModelInstaller {
         case .parakeet: try await ParakeetBackend.makeTranscriber(id)
         case .cohere: try await CohereBackend.makeTranscriber()
         case .nemotron: try await NemotronBackend.makeTranscriber()
+        case .qwen3ASR: try await Qwen3ASRBackend.makeTranscriber()
         case .whisperKit: try await WhisperKitBackend.makeTranscriber(id)
         }
     }

@@ -7,6 +7,13 @@ import Testing
 /// Run with `PARLO_BENCHMARK=1 swift test --filter ModelBenchmarkTests`.
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["PARLO_BENCHMARK"] == "1"))
 struct ModelBenchmarkTests {
+    private final class TestBundleToken {}
+
+    /// Registers the test bundle so MLX finds its Metal library (see EngineIntegrationTests).
+    init() {
+        _ = Bundle(for: TestBundleToken.self)
+    }
+
     static let italian = [
         "Domani mattina alle nove ho una riunione con il cliente per discutere il budget del prossimo trimestre.",
         "Perché non mi hai mandato il file? Pensavo fosse già pronto, ma forse c'è ancora qualcosa da sistemare.",

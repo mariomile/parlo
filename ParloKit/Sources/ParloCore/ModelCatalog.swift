@@ -3,11 +3,12 @@ public enum ModelID: String, Codable, CaseIterable, Sendable {
     case parakeetV3, parakeetUltra, parakeetRedux, parakeetV2
     case cohereTranscribe
     case nemotronMultilingual
+    case qwen3ASR
     case whisperTiny, whisperBase, whisperSmall, whisperLargeV3TurboCompact, whisperLargeV3, whisperLargeV3Turbo
 }
 
 public enum Engine: String, Sendable {
-    case apple, parakeet, cohere, nemotron, whisperKit
+    case apple, parakeet, cohere, nemotron, qwen3ASR, whisperKit
 }
 
 public struct ModelInfo: Identifiable, Sendable {
@@ -56,6 +57,10 @@ public enum ModelCatalog {
                   requiresExplicitLanguage: true),
         ModelInfo(id: .nemotronMultilingual, displayName: "Nemotron Speech Multilingual", engine: .nemotron, approxSizeMB: 610,
                   languages: "en, es, fr, it, pt, de, zh, ja", italian: 2, english: 2, speed: 4, note: "NVIDIA multilingual model.",
+                  requiresExplicitLanguage: false),
+        ModelInfo(id: .qwen3ASR, displayName: "Qwen3-ASR 1.7B", engine: .qwen3ASR, approxSizeMB: 1540,
+                  languages: "30 languages, auto-detect", italian: 5, english: 5, speed: 3,
+                  note: "Most accurate in our tests. Doesn't use your dictionary words.",
                   requiresExplicitLanguage: false),
         ModelInfo(id: .whisperTiny, displayName: "Whisper Tiny", engine: .whisperKit, approxSizeMB: 77,
                   languages: "99 languages", italian: 1, english: 2, speed: 5, note: "Fastest Whisper, lowest accuracy.",
