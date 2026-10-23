@@ -1,0 +1,5 @@
+Parlo.xcodeproj/
+.build/
+DerivedData/
+.swiftpm/
+build/

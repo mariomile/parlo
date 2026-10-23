@@ -61,7 +61,7 @@ One component per file, each with one job. Pure logic is separated from system I
 - `HotkeyMonitor`: CGEvent tap on `flagsChanged`. Fn down/up starts/stops dictation; Fn+Ctrl starts/stops command mode.
 - `AudioRecorder`: AVAudioEngine input tap, converts to 16 kHz mono Float32, accumulates samples, publishes an input level for the HUD.
 - `Transcriber` protocol with three implementations: `FluidAudioTranscriber`, `WhisperKitTranscriber`, `AppleSpeechTranscriber`. Input: samples + language setting. Output: text.
-- `ModelManager`: owns the catalog, downloads into `~/Library/Application Support/Parlo/Models`, reports progress, supports cancel and delete, persists the active model, loads it and keeps it warm.
+- `ModelManager`: owns the catalog, downloads models (FluidAudio models into FluidAudio's default cache `~/Library/Application Support/FluidAudio/Models`, shared with FluidVoice; WhisperKit models into `~/Library/Application Support/Parlo/Models/whisperkit`; Apple Speech assets via the system), reports progress, supports cancel and delete, persists the active model, loads it and keeps it warm.
 - `LLMClient`: OpenAI-compatible `chat/completions`. Base URL, model and on/off in settings; API key in Keychain. 5 s timeout.
 - `TextInserter`: saves the pasteboard, writes the text, posts Cmd+V, restores the pasteboard.
 - `SelectionReader`: saves the pasteboard, posts Cmd+C, reads the selection, restores the pasteboard. Cmd+C is used instead of the Accessibility selected-text attribute because it works in Electron and browser apps.
@@ -104,7 +104,7 @@ Menu bar menu: status, active model, "Copy last dictation", Settings, Quit. Sett
 
 | Situation | Behavior |
 |---|---|
-| First launch | Checklist: Microphone, Accessibility, and instruction to set "Press 🌐 key to: Do nothing" so Fn doesn't open the emoji picker |
+| First launch | Checklist: Microphone, Accessibility, Input Monitoring (needed by the Fn key event tap), and instruction to set "Press 🌐 key to: Do nothing" so Fn doesn't open the emoji picker |
 | Permission missing at use time | HUD error with a button that opens the right System Settings pane |
 | Active model still downloading | HUD: "Model downloading" with progress; nothing recorded |
 | Download fails or is cancelled | Partial files deleted; model stays "not downloaded" |
