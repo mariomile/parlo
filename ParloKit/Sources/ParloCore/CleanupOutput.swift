@@ -5,13 +5,17 @@ enum CleanupOutput {
     /// Cleaned text may be this much shorter or longer than the transcript; beyond it the model
     /// probably answered, summarized or commented instead of cleaning.
     static let lengthRatioRange = 0.5...1.8
+    /// Below this many characters, dropping fillers alone can halve a dictation ("ehm sì" → "Sì."),
+    /// so only the upper bound applies.
+    static let shortInput = 20
 
     /// The usable cleaned text, or nil when its length is implausible for a cleanup of `input`.
     static func accepted(_ output: String, input: String) -> String? {
         let text = stripWrappers(output, input: input)
         guard !text.isEmpty, !input.isEmpty else { return nil }
         let ratio = Double(text.count) / Double(input.count)
-        return lengthRatioRange.contains(ratio) ? text : nil
+        let tooShort = input.count >= shortInput && ratio < lengthRatioRange.lowerBound
+        return tooShort || ratio > lengthRatioRange.upperBound ? nil : text
     }
 
     private static let preamble = try! NSRegularExpression(

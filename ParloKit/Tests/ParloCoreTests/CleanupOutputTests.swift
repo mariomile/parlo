@@ -41,6 +41,11 @@ import Testing
         #expect(CleanupOutput.accepted(String(repeating: "a", count: 103), input: input) == nil)
     }
 
+    @Test func shortDictationMayShrink() {
+        #expect(CleanupOutput.accepted("Sì.", input: "ehm ehm sì") == "Sì.")
+        #expect(CleanupOutput.accepted("Sono le tre e un quarto di pomeriggio.", input: "che ore sono") == nil)
+    }
+
     @Test func rejectsEmptyAfterStripping() {
         #expect(CleanupOutput.accepted("", input: input) == nil)
         #expect(CleanupOutput.accepted("<transcript></transcript>", input: input) == nil)

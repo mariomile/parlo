@@ -40,6 +40,7 @@ enum ParakeetBackend {
 actor ParakeetTranscriber: Transcriber {
     let manager: AsrManager
     private var ctcModels: CtcModels?
+    private var loadingCtc = false
     private var session: (key: [String], boosting: VocabularyBoostingSession)?
 
     init(manager: AsrManager) {
@@ -47,6 +48,7 @@ actor ParakeetTranscriber: Transcriber {
     }
 
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
+        if !dictionary.terms.isEmpty { startLoadingCtcModels() }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let language = languageCode.flatMap { Language(rawValue: $0) }
         let result = try await manager.transcribe(samples, decoderState: &state, language: language)
@@ -64,7 +66,7 @@ actor ParakeetTranscriber: Transcriber {
         let key = entries.map { ([$0.term] + $0.heardAs).joined(separator: "\u{1F}") }
         if let session, session.key == key { return session.boosting }
 
-        guard let models = await loadedCtcModels() else { return nil }
+        guard let models = ctcModels else { return nil }
         let terms = entries.map { entry in
             CustomVocabularyTerm(
                 text: entry.term.trimmingCharacters(in: .whitespaces),
@@ -78,9 +80,16 @@ actor ParakeetTranscriber: Transcriber {
         return boosting
     }
 
-    private func loadedCtcModels() async -> CtcModels? {
-        if let ctcModels { return ctcModels }
-        ctcModels = try? await CtcModels.downloadAndLoad(variant: .ctc110m)
-        return ctcModels
+    /// The CTC model (~100 MB) downloads and loads in the background: dictations made before it is
+    /// ready skip boosting instead of waiting for it.
+    private func startLoadingCtcModels() {
+        guard ctcModels == nil, !loadingCtc else { return }
+        loadingCtc = true
+        Task { await ctcLoaded(try? await CtcModels.downloadAndLoad(variant: .ctc110m)) }
+    }
+
+    private func ctcLoaded(_ models: CtcModels?) {
+        ctcModels = models
+        loadingCtc = false
     }
 }

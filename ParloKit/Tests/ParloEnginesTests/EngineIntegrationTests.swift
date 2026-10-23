@@ -63,6 +63,12 @@ struct EngineIntegrationTests {
         let dictionary = [
             DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "AGENTS.md"), DictionaryEntry(term: "pull request"),
         ]
+        // The CTC model loads in the background after the first dictation that has a dictionary.
+        let warmup = try Self.speech("Aggiorna il file CLAUDE.md", voice: "Alice")
+        for _ in 0..<60 where try await !transcriber.transcribe(warmup, languageCode: "it", dictionary: dictionary)
+            .contains("CLAUDE.md") {
+            try await Task.sleep(for: .seconds(1))
+        }
         for (phrase, expected) in [
             ("Aggiorna il file CLAUDE.md e apri una pull request", ["CLAUDE.md", "pull request"]),
             ("Modifica CLAUDE.md o AGENTS.md prima del commit", ["CLAUDE.md", "AGENTS.md"]),
