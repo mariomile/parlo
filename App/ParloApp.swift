@@ -19,6 +19,6 @@ struct ParloApp: App {
         } label: {
             Image(systemName: delegate.controller.phase == .idle ? "waveform" : "mic.fill")
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
     }
 }

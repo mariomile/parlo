@@ -164,7 +164,7 @@ final class AppController {
             return
         }
         phase = .processing
-        hud.show(.processing)
+        hud.show(.processing(command: current.command))
         Task {
             defer { phase = .idle }
             do {
@@ -210,7 +210,7 @@ final class AppController {
     private func deliver(_ text: String, warning: String?) async {
         lastDictation = text
         await TextInserter.insert(text)
-        if let warning { hud.show(.message(warning, isError: true)) } else { hud.hide() }
+        hud.show(warning.map { .message($0, isError: true) } ?? .done)
     }
 
     // MARK: - Windows

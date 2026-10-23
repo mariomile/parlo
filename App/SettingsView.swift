@@ -24,7 +24,7 @@ struct SettingsView: View {
 
 // MARK: - General
 
-private let languages: [(code: String?, name: String)] = [
+let languages: [(code: String?, name: String)] = [
     (nil, "Auto-detect"), ("it", "Italian"), ("en", "English"), ("es", "Spanish"), ("fr", "French"),
     ("de", "German"), ("pt", "Portuguese"), ("nl", "Dutch"), ("pl", "Polish"), ("ja", "Japanese"), ("zh", "Chinese"),
 ]
