@@ -35,12 +35,52 @@ enum ParakeetBackend {
     }
 }
 
-struct ParakeetTranscriber: Transcriber {
+/// With a dictionary, the transcript is rescored against a small CTC model run over the same audio,
+/// which swaps in dictionary terms where the acoustics support them.
+actor ParakeetTranscriber: Transcriber {
     let manager: AsrManager
+    private var ctcModels: CtcModels?
+    private var session: (key: [String], boosting: VocabularyBoostingSession)?
 
-    func transcribe(_ samples: [Float], languageCode: String?) async throws -> String {
+    init(manager: AsrManager) {
+        self.manager = manager
+    }
+
+    func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let language = languageCode.flatMap { Language(rawValue: $0) }
-        return try await manager.transcribe(samples, decoderState: &state, language: language).text
+        let result = try await manager.transcribe(samples, decoderState: &state, language: language)
+        guard let timings = result.tokenTimings, let boosting = await boostingSession(for: dictionary) else {
+            return result.text
+        }
+        return await boosting.rescore(text: result.text, tokenTimings: timings, audioSamples: samples)?.text
+            ?? result.text
+    }
+
+    /// Nil when the dictionary is empty or the CTC model can't load: boosting never blocks a dictation.
+    private func boostingSession(for dictionary: [DictionaryEntry]) async -> VocabularyBoostingSession? {
+        let entries = dictionary.filter { !$0.term.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard !entries.isEmpty else { return nil }
+        let key = entries.map { ([$0.term] + $0.heardAs).joined(separator: "\u{1F}") }
+        if let session, session.key == key { return session.boosting }
+
+        guard let models = await loadedCtcModels() else { return nil }
+        let terms = entries.map { entry in
+            CustomVocabularyTerm(
+                text: entry.term.trimmingCharacters(in: .whitespaces),
+                aliases: entry.heardAs.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            )
+        }
+        guard let boosting = try? await VocabularyBoostingSession(
+            vocabulary: CustomVocabularyContext(terms: terms), ctcModels: models
+        ) else { return nil }
+        session = (key, boosting)
+        return boosting
+    }
+
+    private func loadedCtcModels() async -> CtcModels? {
+        if let ctcModels { return ctcModels }
+        ctcModels = try? await CtcModels.downloadAndLoad(variant: .ctc110m)
+        return ctcModels
     }
 }

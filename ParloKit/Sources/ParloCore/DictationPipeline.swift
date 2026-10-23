@@ -29,7 +29,9 @@ public struct DictationPipeline: Sendable {
     public func run(samples: [Float], bundleID: String?) async throws -> DictationOutcome {
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else { return .discarded }
         if let speech, try await !speech.containsSpeech(samples) { return .empty }
-        let raw = try await transcriber.transcribe(samples, languageCode: settings.languageCode)
+        let raw = try await transcriber.transcribe(
+            samples, languageCode: settings.languageCode, dictionary: settings.dictionary
+        )
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return .empty }
 

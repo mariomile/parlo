@@ -44,7 +44,7 @@ enum NemotronBackend {
 struct NemotronTranscriber: Transcriber {
     let manager: StreamingNemotronMultilingualAsrManager
 
-    func transcribe(_ samples: [Float], languageCode: String?) async throws -> String {
+    func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         await manager.reset()
         await manager.setLanguage(NemotronBackend.regionalCode(languageCode))
         _ = try await manager.process(samples: samples)
