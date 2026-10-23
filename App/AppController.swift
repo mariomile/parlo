@@ -33,6 +33,8 @@ final class AppController {
     private var tapRetryTimer: Timer?
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    /// Loaded at launch; until it is, recordings go straight to the transcriber.
+    private var speechDetector: SileroSpeechDetector?
 
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
@@ -55,6 +57,7 @@ final class AppController {
             await models.refresh()
             models.warmUp()
         }
+        Task { speechDetector = try? await SileroSpeechDetector.load() }
         if !settings.hasCompletedOnboarding || !Permissions.allGranted { showOnboarding() }
     }
 
@@ -172,7 +175,8 @@ final class AppController {
                 if current.command {
                     let selection = await current.selection?.value
                     let outcome = try await CommandPipeline(
-                        transcriber: transcriber, llm: llm, languageCode: settings.languageCode
+                        transcriber: transcriber, llm: llm, languageCode: settings.languageCode,
+                        speech: speechDetector
                     ).run(samples: samples, selection: selection)
                     switch outcome {
                     case .discarded: hud.hide()
@@ -181,7 +185,7 @@ final class AppController {
                     }
                 } else {
                     let outcome = try await DictationPipeline(
-                        transcriber: transcriber, llm: llm, settings: settings
+                        transcriber: transcriber, llm: llm, settings: settings, speech: speechDetector
                     ).run(samples: samples, bundleID: current.bundleID)
                     switch outcome {
                     case .discarded: hud.hide()
@@ -196,7 +200,7 @@ final class AppController {
         }
     }
 
-    /// fn was combined with another key (fn+Delete, fn+arrow): drop the recording.
+    /// fn was combined with another key right away (fn+Delete, fn+arrow): drop the recording.
     private func cancel() {
         guard phase == .recording else { return }
         levelTimer?.invalidate()
