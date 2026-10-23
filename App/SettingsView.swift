@@ -2,17 +2,19 @@ import AppKit
 import ParloCore
 import SwiftUI
 
+enum SettingsTab: Hashable { case general, models, ai, styles, dictionary, snippets }
+
 struct SettingsView: View {
-    let controller: AppController
+    @Bindable var controller: AppController
 
     var body: some View {
-        TabView {
-            Tab("General", systemImage: "gearshape") { GeneralTab(controller: controller) }
-            Tab("Models", systemImage: "square.and.arrow.down") { ModelsTab(models: controller.models) }
-            Tab("AI", systemImage: "sparkles") { AITab(controller: controller) }
-            Tab("Styles", systemImage: "textformat") { StylesTab(controller: controller) }
-            Tab("Dictionary", systemImage: "character.book.closed") { DictionaryTab(controller: controller) }
-            Tab("Snippets", systemImage: "text.badge.plus") { SnippetsTab(controller: controller) }
+        TabView(selection: $controller.settingsTab) {
+            Tab("General", systemImage: "gearshape", value: .general) { GeneralTab(controller: controller) }
+            Tab("Models", systemImage: "square.and.arrow.down", value: .models) { ModelsTab(models: controller.models) }
+            Tab("AI", systemImage: "sparkles", value: .ai) { AITab(controller: controller) }
+            Tab("Styles", systemImage: "textformat", value: .styles) { StylesTab(controller: controller) }
+            Tab("Dictionary", systemImage: "character.book.closed", value: .dictionary) { DictionaryTab(controller: controller) }
+            Tab("Snippets", systemImage: "text.badge.plus", value: .snippets) { SnippetsTab(controller: controller) }
         }
         .frame(width: 640, height: 500)
     }

@@ -21,6 +21,7 @@ final class AppController {
     private(set) var phase: Phase = .idle
     private(set) var lastDictation: String?
     private(set) var hotkeyActive = false
+    var settingsTab: SettingsTab = .general
     let models: ModelManager
 
     private let store: SettingsStore
@@ -31,6 +32,7 @@ final class AppController {
     private var levelTimer: Timer?
     private var tapRetryTimer: Timer?
     private var onboardingWindow: NSWindow?
+    private var settingsWindow: NSWindow?
 
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
@@ -70,6 +72,11 @@ final class AppController {
         guard hotkeyActive else { return }
         tapRetryTimer?.invalidate()
         tapRetryTimer = nil
+    }
+
+    /// Cleanup is on but a cloud provider has no key yet, so every call would fail.
+    var aiNeedsKey: Bool {
+        settings.llm.enabled && apiKey == nil && !settings.llm.baseURL.contains("localhost")
     }
 
     var llm: (any ChatCompleting)? {
@@ -217,6 +224,24 @@ final class AppController {
         }
         NSApp.activate()
         onboardingWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Owned here like onboarding: SwiftUI's Settings scene doesn't open from a menu bar–only app.
+    func showSettings(_ tab: SettingsTab) {
+        settingsTab = tab
+        if settingsWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 500),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false
+            )
+            window.title = "Parlo Settings"
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: SettingsView(controller: self))
+            window.center()
+            settingsWindow = window
+        }
+        NSApp.activate()
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     func relaunch() {

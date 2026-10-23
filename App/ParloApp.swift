@@ -20,9 +20,5 @@ struct ParloApp: App {
             Image(systemName: delegate.controller.phase == .idle ? "waveform" : "mic.fill")
         }
         .menuBarExtraStyle(.menu)
-
-        Settings {
-            SettingsView(controller: delegate.controller)
-        }
     }
 }
