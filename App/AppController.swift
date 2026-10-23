@@ -219,6 +219,14 @@ final class AppController {
         onboardingWindow?.makeKeyAndOrderFront(nil)
     }
 
+    func relaunch() {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+    }
+
     func finishOnboarding() {
         settings.hasCompletedOnboarding = true
         onboardingWindow?.close()

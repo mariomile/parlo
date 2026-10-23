@@ -29,6 +29,14 @@ struct OnboardingView: View {
                     PermissionRow(title: "Input Monitoring", detail: "To notice when you hold fn.", granted: inputMonitoring) {
                         Permissions.requestInputMonitoring()
                     }
+                    if inputMonitoring && !controller.hotkeyActive {
+                        HStack {
+                            Text("macOS applies Input Monitoring after a restart.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Restart Parlo") { controller.relaunch() }
+                        }
+                    }
                 }
                 .padding(6)
             }

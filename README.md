@@ -33,9 +33,11 @@ The welcome window walks through:
 
 Reopen it any time from the menu: **Permissions & Setup…**
 
-### Builds are ad-hoc signed
+### Signing and permissions
 
-There is no Developer ID signature yet. After a rebuild, macOS may treat Parlo as a new app and the privacy toggles stop working even though they look on. Fix: in System Settings → Privacy & Security, remove Parlo from Accessibility and Input Monitoring with the **−** button, then add it again. For the same reason macOS may ask once for keychain access to the AI API key.
+There is no Developer ID signature yet. `run.sh` signs the app with a local self-signed certificate, "Parlo Development", created in your login keychain on the first run (`scripts/make-signing-identity.sh`). Because the certificate stays the same, macOS keeps the privacy permissions across rebuilds. If Input Monitoring is granted but fn does nothing, use **Restart Parlo** in the welcome window: macOS applies that permission only after a relaunch.
+
+If permissions ever look on but don't work, reset them and grant again: `tccutil reset All com.mariomiletta.parlo`.
 
 ## Models
 
