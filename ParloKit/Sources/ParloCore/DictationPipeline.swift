@@ -43,11 +43,16 @@ public struct DictationPipeline: Sendable {
 
         let system = PromptBuilder.cleanupSystemPrompt(
             style: StyleResolver.style(for: bundleID, overrides: settings.styleOverrides),
-            terms: settings.dictionary.map(\.term),
+            dictionary: settings.dictionary,
             hasPlaceholders: !used.isEmpty
         )
         do {
-            let cleaned = try await llm.complete(system: system, user: encoded, timeout: Self.cleanupTimeout)
+            let reply = try await llm.complete(
+                system: system, user: PromptBuilder.cleanupUserMessage(encoded), timeout: Self.cleanupTimeout
+            )
+            guard let cleaned = CleanupOutput.accepted(reply, input: encoded) else {
+                return .inserted(text: uncleaned, cleanupError: "Cleanup output looked wrong")
+            }
             guard SnippetCodec.allTokensPresent(cleaned, used: used) else {
                 return .inserted(text: uncleaned, cleanupError: "Cleanup dropped a snippet")
             }

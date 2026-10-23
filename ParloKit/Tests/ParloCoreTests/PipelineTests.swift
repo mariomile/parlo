@@ -49,12 +49,15 @@ import Testing
     }
 
     @Test func llmCleanupWithStyleAndPlaceholders() async throws {
-        let llm = FakeLLM { _, user in user.replacingOccurrences(of: "um ", with: "").capitalized(firstOnly: true) + "." }
+        let llm = FakeLLM { _, user in
+            user.replacingOccurrences(of: "<transcript>", with: "").replacingOccurrences(of: "</transcript>", with: "")
+                .replacingOccurrences(of: "um ", with: "").capitalized(firstOnly: true) + "."
+        }
         let p = DictationPipeline(transcriber: FakeTranscriber(text: "um send it to my address"), llm: llm, settings: settings)
         let out = try await p.run(samples: oneSecond, bundleID: "com.apple.mail")
         #expect(out == .inserted(text: "Send it to Via Roma 1.", cleanupError: nil))
         #expect(llm.calls.count == 1)
-        #expect(llm.calls[0].user == "um send it to ⟦S1⟧")
+        #expect(llm.calls[0].user == "<transcript>um send it to ⟦S1⟧</transcript>")
         #expect(llm.calls[0].system.contains(PromptBuilder.styleInstruction(.formal)))
         #expect(llm.calls[0].system.contains("Claude Code"))
         #expect(llm.calls[0].timeout == 5)
@@ -67,6 +70,38 @@ import Testing
         guard case let .inserted(text, err) = out else { Issue.record("unexpected \(out)"); return }
         #expect(text == "Claude Code at Via Roma 1")
         #expect(err != nil)
+    }
+
+    @Test func dictionaryReachesTranscriber() async throws {
+        let transcriber = RecordingTranscriber(text: "ciao")
+        let s = settings
+        let p = DictationPipeline(transcriber: transcriber, llm: nil, settings: s)
+        _ = try await p.run(samples: oneSecond, bundleID: nil)
+        #expect(transcriber.dictionaries.value == [s.dictionary])
+    }
+
+    @Test(arguments: [
+        "Sono le quindici e trenta a Roma, dove adesso il cielo è sereno e la temperatura è di circa ventidue gradi.",
+        "ok",
+        "Ciao Marco, ti scrivo perché domani non posso venire alla call. Possiamo spostarla a giovedì? Fammi sapere quando puoi, grazie mille di tutto.",
+    ])
+    func implausibleLengthFallsBackToRaw(reply: String) async throws {
+        let llm = FakeLLM { _, _ in reply }
+        let p = DictationPipeline(
+            transcriber: FakeTranscriber(text: "che ore sono adesso a roma per favore"), llm: llm, settings: .default
+        )
+        let out = try await p.run(samples: oneSecond, bundleID: nil)
+        #expect(out == .inserted(text: "che ore sono adesso a roma per favore", cleanupError: "Cleanup output looked wrong"))
+    }
+
+    @Test func preambleAndTagsStrippedFromCleanup() async throws {
+        let llm = FakeLLM { _, _ in "Ecco il testo pulito:\n\"<transcript>Ho fatto il commit, ma la pull request non è pronta.</transcript>\"" }
+        let p = DictationPipeline(
+            transcriber: FakeTranscriber(text: "ho fatto il commit ma la pull request non e pronta"), llm: llm,
+            settings: .default
+        )
+        #expect(try await p.run(samples: oneSecond, bundleID: nil)
+            == .inserted(text: "Ho fatto il commit, ma la pull request non è pronta.", cleanupError: nil))
     }
 
     @Test func llmDroppingTokenFallsBack() async throws {
