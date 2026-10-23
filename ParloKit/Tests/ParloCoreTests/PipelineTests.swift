@@ -1,0 +1,94 @@
+import Testing
+@testable import ParloCore
+
+@Suite struct RecordingGuardTests {
+    @Test func threshold() {
+        #expect(!RecordingGuard.isLongEnough(sampleCount: 4_799))
+        #expect(RecordingGuard.isLongEnough(sampleCount: 4_800))
+    }
+}
+
+@Suite struct DictationPipelineTests {
+    var settings: AppSettings {
+        var s = AppSettings.default
+        s.dictionary = [DictionaryEntry(term: "Claude Code", heardAs: ["cloud code"])]
+        s.snippets = [Snippet(trigger: "my address", text: "Via Roma 1")]
+        return s
+    }
+
+    @Test func shortAudioDiscarded() async throws {
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "hi"), llm: nil, settings: settings)
+        #expect(try await p.run(samples: [0, 0], bundleID: nil) == .discarded)
+    }
+
+    @Test func emptyTranscript() async throws {
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "  \n"), llm: nil, settings: settings)
+        #expect(try await p.run(samples: oneSecond, bundleID: nil) == .empty)
+    }
+
+    @Test func noLLMAppliesDictionaryAndSnippets() async throws {
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "open cloud code at my address"), llm: nil, settings: settings)
+        #expect(try await p.run(samples: oneSecond, bundleID: nil) == .inserted(text: "open Claude Code at Via Roma 1", cleanupError: nil))
+    }
+
+    @Test func llmCleanupWithStyleAndPlaceholders() async throws {
+        let llm = FakeLLM { _, user in user.replacingOccurrences(of: "um ", with: "").capitalized(firstOnly: true) + "." }
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "um send it to my address"), llm: llm, settings: settings)
+        let out = try await p.run(samples: oneSecond, bundleID: "com.apple.mail")
+        #expect(out == .inserted(text: "Send it to Via Roma 1.", cleanupError: nil))
+        #expect(llm.calls.count == 1)
+        #expect(llm.calls[0].user == "um send it to ⟦S1⟧")
+        #expect(llm.calls[0].system.contains(PromptBuilder.styleInstruction(.formal)))
+        #expect(llm.calls[0].system.contains("Claude Code"))
+        #expect(llm.calls[0].timeout == 5)
+    }
+
+    @Test func llmFailureKeepsText() async throws {
+        let llm = FakeLLM { _, _ in throw FailingError() }
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "cloud code at my address"), llm: llm, settings: settings)
+        let out = try await p.run(samples: oneSecond, bundleID: nil)
+        guard case let .inserted(text, err) = out else { Issue.record("unexpected \(out)"); return }
+        #expect(text == "Claude Code at Via Roma 1")
+        #expect(err != nil)
+    }
+
+    @Test func llmDroppingTokenFallsBack() async throws {
+        let llm = FakeLLM { _, _ in "Send it." }
+        let p = DictationPipeline(transcriber: FakeTranscriber(text: "send it to my address"), llm: llm, settings: settings)
+        let out = try await p.run(samples: oneSecond, bundleID: nil)
+        guard case let .inserted(text, err) = out else { Issue.record("unexpected \(out)"); return }
+        #expect(text == "send it to Via Roma 1")
+        #expect(err != nil)
+    }
+}
+
+@Suite struct CommandPipelineTests {
+    @Test func requiresLLM() async throws {
+        let p = CommandPipeline(transcriber: FakeTranscriber(text: "make formal"), llm: nil, languageCode: nil)
+        await #expect(throws: CommandError.llmNotConfigured) { try await p.run(samples: oneSecond, selection: "x") }
+    }
+
+    @Test func forwardsSelection() async throws {
+        let llm = FakeLLM { _, _ in "  Dear Sir.  " }
+        let p = CommandPipeline(transcriber: FakeTranscriber(text: "make formal"), llm: llm, languageCode: nil)
+        #expect(try await p.run(samples: oneSecond, selection: "hey dude") == .result("Dear Sir."))
+        #expect(llm.calls[0].user.contains("hey dude"))
+        #expect(llm.calls[0].timeout == 15)
+    }
+
+    @Test func emptyInstruction() async throws {
+        let llm = FakeLLM { _, _ in "x" }
+        let p = CommandPipeline(transcriber: FakeTranscriber(text: " "), llm: llm, languageCode: nil)
+        #expect(try await p.run(samples: oneSecond, selection: nil) == .empty)
+        #expect(llm.calls.isEmpty)
+    }
+
+    @Test func shortDiscarded() async throws {
+        let p = CommandPipeline(transcriber: FakeTranscriber(text: "x"), llm: FakeLLM { _, _ in "y" }, languageCode: nil)
+        #expect(try await p.run(samples: [0], selection: nil) == .discarded)
+    }
+}
+
+extension String {
+    func capitalized(firstOnly: Bool) -> String { prefix(1).uppercased() + dropFirst() }
+}
