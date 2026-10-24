@@ -63,6 +63,10 @@ public struct HotkeyStateMachine: Sendable {
         case (.cancelled, false):
             state = .idle
             return nil
+        case (.cancelled, true):
+            // Fn went down again, so its release was missed: this is a new press.
+            state = .idle
+            return handle(fn: true, ctrl: ctrl, at: time)
         default:
             return nil
         }

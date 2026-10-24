@@ -175,4 +175,15 @@ import Testing
         m.fnIsUp()
         #expect(m.handle(fn: false, ctrl: false, at: 2) == .stop)
     }
+
+    @Test func missedReleaseAfterStoppingHandsFreeDoesNotSwallowTheNextPress() {
+        var m = HotkeyStateMachine()
+        _ = m.handle(fn: true, ctrl: false, at: 0)
+        _ = m.handle(fn: false, ctrl: false, at: 0.1)
+        _ = m.handle(fn: true, ctrl: false, at: 0.3)
+        _ = m.handle(fn: false, ctrl: false, at: 0.4)
+        #expect(m.handle(fn: true, ctrl: false, at: 20) == .stop)
+        // The release of that press never arrived.
+        #expect(m.handle(fn: true, ctrl: false, at: 30) == .startDictation)
+    }
 }
