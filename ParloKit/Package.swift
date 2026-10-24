@@ -13,6 +13,8 @@ let package = Package(
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", exact: "1.1.1"),
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", exact: "0.1.6"),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", exact: "0.13.0"),
+        .package(url: "https://github.com/huggingface/swift-transformers.git", exact: "1.3.5"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", exact: "3.32.3"),
     ],
     targets: [
         .target(name: "ParloCore"),
@@ -24,6 +26,9 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ]
         ),
         .testTarget(name: "ParloCoreTests", dependencies: ["ParloCore"]),

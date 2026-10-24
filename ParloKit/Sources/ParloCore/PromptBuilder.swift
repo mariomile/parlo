@@ -65,13 +65,15 @@ public enum PromptBuilder {
         You are a writing assistant invoked by voice. The user gives a spoken instruction, and optionally a text to apply it to.
         - With a text: apply the instruction to the text and return only the resulting text.
         - Without a text: the instruction is a request to write something; return only what was requested.
+        - Reply in the same language as the text. Without a text, reply in the language of the instruction. Translate only when asked to.
         Never add explanations, preambles, quotes or markdown fences around the result.
         """
     }
 
     public static func commandUserMessage(instruction: String, selection: String?) -> String {
         if let selection, !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Instruction: \(instruction)\n\nText:\n<<<\n\(selection)\n>>>"
+            // Text first: small local models keep its language better when the instruction comes last.
+            return "Text:\n<<<\n\(selection)\n>>>\n\nInstruction: \(instruction)"
         }
         return "Instruction: \(instruction)\n\n(No text selected: write what the instruction asks for.)"
     }

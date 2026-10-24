@@ -133,4 +133,30 @@ struct EngineIntegrationTests {
         print("[qwen3ASR] auto-detect: \(italian)")
         #expect(italian.lowercased().contains("mercato"), "\(italian)")
     }
+
+    /// The dictionary goes to Qwen3-ASR as context. It may change the capitals, so the check ignores case.
+    @Test func qwen3UsesDictionaryAsContext() async throws {
+        let installer = EngineInstaller()
+        guard await installer.isInstalled(.qwen3ASR) else { return }
+        let t = try await installer.makeTranscriber(.qwen3ASR)
+        let dictionary = [
+            DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "AGENTS.md"), DictionaryEntry(term: "README"),
+        ]
+        for (phrase, voice, expected) in [
+            ("Aggiorna il file CLAUDE.md e apri una pull request", "Alice", ["claude.md"]),
+            ("Ho chiesto a Claude Code di sistemare il README", "Alice", ["readme"]),
+            ("Can you check the AGENTS.md file in the repo", "Samantha", ["agents.md"]),
+            ("Domani andiamo al mercato a comprare la frutta fresca.", "Alice", []),
+        ] {
+            let audio = try Self.speech(phrase, voice: voice)
+            let without = try await t.transcribe(audio, languageCode: nil, dictionary: [])
+            let with = try await t.transcribe(audio, languageCode: nil, dictionary: dictionary)
+            print("[qwen3ASR] without dictionary: \(without)")
+            print("[qwen3ASR] with dictionary:    \(with)")
+            for term in expected { #expect(with.lowercased().contains(term), "\(with)") }
+            if expected.isEmpty {
+                #expect(!dictionary.terms.contains { with.lowercased().contains($0.lowercased()) }, "\(with)")
+            }
+        }
+    }
 }
