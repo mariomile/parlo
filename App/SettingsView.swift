@@ -194,7 +194,11 @@ private struct ModelsTab: View {
             await rescan()
         }
         .onChange(of: installedIDs) { Task { await rescan() } }
-        .onChange(of: cleanupModel.state) { Task { await rescan() } }
+        .onChange(of: cleanupModel.state) { _, state in
+            // Progress ticks don't change what's on disk worth listing; the end of a download does.
+            if case .downloading = state { return }
+            Task { await rescan() }
+        }
         .confirmationDialog(
             "Delete \(pendingDelete?.name ?? "")?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
