@@ -496,6 +496,8 @@ private struct AITab: View {
                 testResult = (false, error.localizedDescription)
             }
             testing = false
+            // The test loaded the local model even if cleanup is off: free it again.
+            if client is LocalLLMClient { controller.syncLocalLLM() }
         }
     }
 }

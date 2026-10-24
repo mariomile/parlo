@@ -94,6 +94,7 @@ final class AppController {
         recorder.onFailure = { [weak self] reason in self?.microphoneFailed(reason) }
         history.markInterrupted()
         recent = history.entries()
+        EngineInstaller.removeUnfinishedDownloads()
         startHotkey()
         Task {
             await models.refresh()
@@ -146,7 +147,7 @@ final class AppController {
     }
 
     /// The local model stays in memory while cleanup uses it, so only the first cleanup waits for it to load.
-    private func syncLocalLLM() {
+    func syncLocalLLM() {
         if settings.llm.enabled && settings.llm.provider == .local { LocalLLM.warmUp() } else { LocalLLM.unload() }
     }
 
@@ -276,14 +277,17 @@ final class AppController {
     }
 
     /// The event tap can miss fn's release (it is switched off while the system is busy). If the keyboard
-    /// says fn has been up for a while, stop as if it had been released.
+    /// says fn has been up for a while, stop as if it had been released. Hands-free, the missed release is
+    /// the second tap's: pass it on, or the press meant to stop the recording would be taken for it.
     private func checkFnStillHeld() {
-        guard var rec = recording, !rec.locked, stopping == nil else { return }
+        guard var rec = recording, stopping == nil else { return }
         let held = CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn)
         if held { rec.sawFnHeld = true }
         rec.fnUpTicks = held ? 0 : rec.fnUpTicks + 1
         recording = rec
-        guard rec.sawFnHeld, rec.fnUpTicks >= 15 else { return }
+        guard rec.fnUpTicks >= 15 else { return }
+        if rec.locked { return hotkey.fnIsUp() }
+        guard rec.sawFnHeld else { return }
         hotkey.reset()
         end()
     }
@@ -370,7 +374,8 @@ final class AppController {
         let previous = queue
         queue = Task {
             await previous?.value
-            await preview.idle()
+            // A stuck preview holds the transcriber: load a fresh one for this job.
+            if await !preview.idle() { models.reload() }
             await job()
             pendingJobs -= 1
             updatePhase()
@@ -529,12 +534,15 @@ final class AppController {
         let samples = recorder.stop()
         recording = nil
         updatePhase()
-        guard rec.locked, RecordingGuard.isLongEnough(sampleCount: samples.count),
-              let entry = try? history.add(samples: samples, command: rec.command)
-        else { return hud.hide() }
-        history.update(entry.id, status: .failed("Cancelled"), text: nil)
-        recent = history.entries()
-        hud.show(.message("Cancelled. The audio is kept in Recent if you need it.", isError: false))
+        guard rec.locked, RecordingGuard.isLongEnough(sampleCount: samples.count) else { return hud.hide() }
+        do {
+            let entry = try history.add(samples: samples, command: rec.command)
+            history.update(entry.id, status: .failed("Cancelled"), text: nil)
+            recent = history.entries()
+            hud.show(.message("Cancelled. The audio is kept in Recent if you need it.", isError: false))
+        } catch {
+            hud.show(.message("Cancelled. Couldn't keep the audio: \(error.localizedDescription)", isError: true))
+        }
     }
 
     /// The microphone stopped mid-recording and could not restart: keep what was captured.

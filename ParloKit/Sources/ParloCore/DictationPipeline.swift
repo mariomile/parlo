@@ -9,7 +9,10 @@ public enum DictationOutcome: Equatable, Sendable {
 
 /// transcribe -> dictionary -> spoken layout -> snippet tokens -> LLM cleanup -> expand snippets.
 public struct DictationPipeline: Sendable {
-    public static let cleanupTimeout: TimeInterval = 5
+    /// Time the LLM gets to clean up `text`: 5 s for a sentence, more for minutes of hands-free dictation.
+    public static func cleanupTimeout(for text: String) -> TimeInterval {
+        5 + Double(text.count) / 100
+    }
 
     let transcriber: any Transcriber
     let llm: (any ChatCompleting)?
@@ -48,7 +51,7 @@ public struct DictationPipeline: Sendable {
         )
         do {
             let reply = try await llm.complete(
-                system: system, user: PromptBuilder.cleanupUserMessage(encoded), timeout: Self.cleanupTimeout
+                system: system, user: PromptBuilder.cleanupUserMessage(encoded), timeout: Self.cleanupTimeout(for: encoded)
             )
             guard let cleaned = CleanupOutput.accepted(reply, input: encoded) else {
                 return .inserted(text: uncleaned, cleanupError: "Cleanup output looked wrong")

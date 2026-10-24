@@ -34,6 +34,11 @@ final class HotkeyMonitor {
         machine.reset()
     }
 
+    /// The keyboard says fn is up, though its release never reached the tap.
+    func fnIsUp() {
+        machine.fnIsUp()
+    }
+
     /// `fromHardware` is false for synthetic events, like our own Cmd+C in command mode.
     fileprivate func handle(type: CGEventType, flags: CGEventFlags, time: Double, fromHardware: Bool, escape: Bool) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {

@@ -22,7 +22,8 @@ enum Qwen3ASRBackend {
     }
 
     static func makeTranscriber() async throws -> any Transcriber {
-        Qwen3ASRTranscriber(model: try await Qwen3ASRModel.fromModelDirectory(directory))
+        MLXCache.limit()
+        return Qwen3ASRTranscriber(model: try await Qwen3ASRModel.fromModelDirectory(directory))
     }
 }
 
@@ -31,6 +32,11 @@ actor Qwen3ASRTranscriber: Transcriber {
 
     init(model: Qwen3ASRModel) {
         self.model = model
+    }
+
+    /// Switching model or reloading drops this transcriber: return the buffers MLX kept for it.
+    deinit {
+        Memory.clearCache()
     }
 
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {

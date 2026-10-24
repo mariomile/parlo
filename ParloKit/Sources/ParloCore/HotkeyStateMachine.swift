@@ -83,6 +83,12 @@ public struct HotkeyStateMachine: Sendable {
         }
     }
 
+    /// Fn is up but its release was missed: the second press of a double tap stays hands-free, and the next
+    /// press stops the recording instead of being taken for that release.
+    public mutating func fnIsUp() {
+        if case .active(_, _, locked: true) = state { state = .locked }
+    }
+
     public mutating func reset() {
         state = .idle
         lastTap = nil

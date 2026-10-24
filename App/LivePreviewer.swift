@@ -31,7 +31,8 @@ final class LivePreviewer {
                 let job = Task { try? await transcriber.transcribe(audio, languageCode: languageCode, dictionary: []) }
                 running = job
                 let text = await job.value
-                running = nil
+                // `idle` may have given up on this preview, and a newer one may be running.
+                if running == job { running = nil }
                 guard !Task.isCancelled else { return }
                 if let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { show(text) }
             }
@@ -43,8 +44,16 @@ final class LivePreviewer {
         loop = nil
     }
 
-    /// Returns once no preview is using the transcriber.
-    func idle() async {
-        _ = await running?.value
+    /// Returns once no preview is using the transcriber, or false after `seconds`: a preview stuck in the
+    /// engine must not hold the dictations queued behind it.
+    func idle(seconds: Double = 5) async -> Bool {
+        guard let job = running else { return true }
+        do {
+            _ = try await Deadline.run(seconds: seconds) { await job.value }
+            return true
+        } catch {
+            if running == job { running = nil }
+            return false
+        }
     }
 }

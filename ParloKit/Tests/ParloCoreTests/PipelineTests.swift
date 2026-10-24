@@ -65,7 +65,7 @@ import Testing
         #expect(llm.calls[0].user == "<transcript>um send it to ⟦S1⟧</transcript>")
         #expect(llm.calls[0].system.contains(PromptBuilder.styleInstruction(.formal)))
         #expect(llm.calls[0].system.contains("Claude Code"))
-        #expect(llm.calls[0].timeout == 5)
+        #expect(llm.calls[0].timeout == DictationPipeline.cleanupTimeout(for: "um send it to ⟦S1⟧"))
     }
 
     @Test func llmFailureKeepsText() async throws {
@@ -116,6 +116,12 @@ import Testing
         guard case let .inserted(text, err) = out else { Issue.record("unexpected \(out)"); return }
         #expect(text == "send it to Via Roma 1")
         #expect(err != nil)
+    }
+
+    @Test func longDictationsGetMoreTimeForCleanup() {
+        #expect(DictationPipeline.cleanupTimeout(for: "Ci vediamo domani.") < 6)
+        // About two minutes of hands-free speech.
+        #expect(DictationPipeline.cleanupTimeout(for: String(repeating: "parola ", count: 300)) > 20)
     }
 }
 

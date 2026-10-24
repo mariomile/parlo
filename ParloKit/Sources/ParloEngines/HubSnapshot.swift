@@ -10,17 +10,36 @@ enum HubSnapshot {
         _ repo: String, to directory: URL, matching patterns: [String], progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let fm = FileManager.default
-        let parent = directory.deletingLastPathComponent()
-        let partial = parent.appendingPathComponent(directory.lastPathComponent + ".partial", isDirectory: true)
-        let scratchCache = parent.appendingPathComponent(directory.lastPathComponent + ".cache", isDirectory: true)
+        let (partial, scratchCache) = leftovers(of: directory)
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: scratchCache) }
         let client = HubClient(cache: HubCache(cacheDirectory: scratchCache))
-        _ = try await client.downloadSnapshot(of: Repo.ID(rawValue: repo)!, to: partial, matching: patterns) {
-            progress($0.fractionCompleted)
+        do {
+            _ = try await client.downloadSnapshot(of: Repo.ID(rawValue: repo)!, to: partial, matching: patterns) {
+                progress($0.fractionCompleted)
+            }
+            try Task.checkCancellation()
+        } catch {
+            // Nothing resumes from a partial download: the cache it would need is deleted too.
+            try? fm.removeItem(at: partial)
+            throw error
         }
-        try Task.checkCancellation()
         if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
         try fm.moveItem(at: partial, to: directory)
+    }
+
+    /// Quitting Parlo mid-download leaves these folders behind, up to the model's size.
+    static func removeLeftovers(of directory: URL) {
+        let (partial, scratchCache) = leftovers(of: directory)
+        try? FileManager.default.removeItem(at: partial)
+        try? FileManager.default.removeItem(at: scratchCache)
+    }
+
+    private static func leftovers(of directory: URL) -> (partial: URL, cache: URL) {
+        let parent = directory.deletingLastPathComponent(), name = directory.lastPathComponent
+        return (
+            parent.appendingPathComponent(name + ".partial", isDirectory: true),
+            parent.appendingPathComponent(name + ".cache", isDirectory: true)
+        )
     }
 }

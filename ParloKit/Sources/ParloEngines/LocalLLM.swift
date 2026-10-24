@@ -1,5 +1,6 @@
 import Foundation
 import MLX
+import Synchronization
 import MLXLLM
 import MLXLMCommon
 import ParloCore
@@ -24,15 +25,28 @@ public enum LocalLLM {
     /// Loads the model in the background so the first cleanup is fast. Does nothing until it's downloaded.
     public static func warmUp() {
         guard isInstalled(at: directory) else { return }
-        Task { _ = try? await loaded.container(directory) }
+        let request = nextRequest()
+        Task { await loaded.warmUp(directory, request: request) }
     }
 
     /// Frees the memory the model holds, about its size on disk.
     public static func unload() {
-        Task { await loaded.unload() }
+        let request = nextRequest()
+        Task { await loaded.unload(request: request) }
     }
 
     static let loaded = LoadedLLM()
+
+    /// `warmUp` and `unload` hand over to tasks that may run out of order: only the latest call is carried out.
+    private static let requests = Mutex(0)
+
+    private static func nextRequest() -> Int {
+        requests.withLock { $0 += 1; return $0 }
+    }
+
+    static func isLatest(_ request: Int) -> Bool {
+        requests.withLock { $0 == request }
+    }
 }
 
 /// The model kept in memory between cleanups; concurrent callers share one load.
@@ -42,7 +56,8 @@ actor LoadedLLM {
     func container(_ directory: URL) async throws -> ModelContainer {
         if let current, current.directory == directory { return try await current.load.value }
         let load = Task {
-            try await LLMModelFactory.shared.loadContainer(from: directory, using: TransformersTokenizerLoader())
+            MLXCache.limit()
+            return try await LLMModelFactory.shared.loadContainer(from: directory, using: TransformersTokenizerLoader())
         }
         current = (directory, load)
         do {
@@ -51,6 +66,16 @@ actor LoadedLLM {
             if current?.directory == directory { current = nil } // let the next cleanup retry
             throw error
         }
+    }
+
+    func warmUp(_ directory: URL, request: Int) async {
+        guard LocalLLM.isLatest(request) else { return }
+        _ = try? await container(directory)
+    }
+
+    func unload(request: Int) {
+        guard LocalLLM.isLatest(request) else { return }
+        unload()
     }
 
     func unload() {
@@ -74,19 +99,16 @@ public struct LocalLLMClient: ChatCompleting {
     public func complete(system: String, user: String, timeout: TimeInterval) async throws -> String {
         guard LocalLLM.isInstalled(at: directory) else { throw LocalLLMError.notInstalled }
         let directory = directory
-        let reply = try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask {
-                // A load cut short by the timeout keeps going, so the next cleanup finds the model ready.
+        let reply: String
+        do {
+            // A load cut short by the timeout keeps going, so the next cleanup finds the model ready.
+            reply = try await Deadline.run(seconds: timeout) {
                 let container = try await LocalLLM.loaded.container(directory)
                 let session = ChatSession(container, instructions: system, generateParameters: GenerateParameters(temperature: 0))
                 return try await session.respond(to: user)
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw LocalLLMError.timedOut
-            }
-            defer { group.cancelAll() }
-            return try await group.next()!
+        } catch is DeadlineExceeded {
+            throw LocalLLMError.timedOut
         }
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LLMError.emptyResponse }
@@ -122,6 +144,7 @@ public struct LocalLLMInstaller: LocalLLMInstalling {
 
     public func uninstall() async throws {
         await LocalLLM.loaded.unload()
+        HubSnapshot.removeLeftovers(of: LocalLLM.directory)
         if FileManager.default.fileExists(atPath: LocalLLM.directory.path) {
             try FileManager.default.removeItem(at: LocalLLM.directory)
         }

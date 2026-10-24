@@ -158,4 +158,21 @@ import Testing
         m.reset()
         #expect(m.handle(fn: true, ctrl: false, at: 600) == .startDictation)
     }
+
+    @Test func missedReleaseOfTheSecondPressStillLetsTheNextPressStop() {
+        var m = HotkeyStateMachine()
+        _ = m.handle(fn: true, ctrl: false, at: 0)
+        _ = m.handle(fn: false, ctrl: false, at: 0.1)
+        #expect(m.handle(fn: true, ctrl: false, at: 0.3) == .lock(command: false))
+        // The tap never saw the release; the keyboard says fn is up.
+        m.fnIsUp()
+        #expect(m.handle(fn: true, ctrl: false, at: 20) == .stop)
+    }
+
+    @Test func fnIsUpDoesNothingOutsideHandsFree() {
+        var m = HotkeyStateMachine()
+        _ = m.handle(fn: true, ctrl: false, at: 0)
+        m.fnIsUp()
+        #expect(m.handle(fn: false, ctrl: false, at: 2) == .stop)
+    }
 }

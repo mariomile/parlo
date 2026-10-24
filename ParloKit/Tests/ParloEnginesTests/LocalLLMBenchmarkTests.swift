@@ -57,7 +57,7 @@ struct LocalLLMBenchmarkTests {
             do {
                 output = try await client.complete(
                     system: system, user: PromptBuilder.cleanupUserMessage(transcript),
-                    timeout: DictationPipeline.cleanupTimeout
+                    timeout: DictationPipeline.cleanupTimeout(for: transcript)
                 )
             } catch {
                 print("[llm \(name)] \(transcript) -> \(error.localizedDescription)")
