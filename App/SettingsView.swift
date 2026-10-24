@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $controller.settingsTab) {
             Tab("General", systemImage: "gearshape", value: .general) { GeneralTab(controller: controller) }
-            Tab("Models", systemImage: "square.and.arrow.down", value: .models) { ModelsTab(models: controller.models, localLLM: controller.localLLM) }
+            Tab("Models", systemImage: "square.and.arrow.down", value: .models) { ModelsTab(models: controller.models, cleanupModel: controller.localLLM.files) }
             Tab("AI", systemImage: "sparkles", value: .ai) { AITab(controller: controller) }
             Tab("Styles", systemImage: "textformat", value: .styles) { StylesTab(controller: controller) }
             Tab("Dictionary", systemImage: "character.book.closed", value: .dictionary) { DictionaryTab(controller: controller) }
@@ -115,7 +115,7 @@ private struct PermissionStatus: View {
 
 private struct ModelsTab: View {
     let models: ModelManager
-    let localLLM: LocalLLMManager
+    let cleanupModel: Installable
     @State private var stored: [StoredFiles] = []
     @State private var pendingDelete: StoredFiles?
     @State private var deleteError: String?
@@ -161,7 +161,7 @@ private struct ModelsTab: View {
             await rescan()
         }
         .onChange(of: installedIDs) { Task { await rescan() } }
-        .onChange(of: localLLM.state) { Task { await rescan() } }
+        .onChange(of: cleanupModel.state) { Task { await rescan() } }
         .confirmationDialog(
             "Delete \(pendingDelete?.name ?? "")?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
@@ -184,7 +184,7 @@ private struct ModelsTab: View {
             isActive(item)
                 ? "Parlo switches to Apple Speech. You can download it again from the list below."
                 : "You can download it again from the list below."
-        case .cleanupModel: "AI cleanup with \(LocalLLM.displayName) stops working until you download it again in AI."
+        case .cleanupModel: "AI cleanup with \(CleanupModel.displayName) stops working until you download it again in AI."
         case .vocabulary: "It downloads again the next time you dictate with Parakeet and have dictionary words."
         case .voiceDetection: "It downloads again on the next dictation."
         case .other: "Parlo doesn't use these files. If FluidVoice needs them, it downloads them again."
@@ -194,7 +194,7 @@ private struct ModelsTab: View {
     private func delete(_ item: StoredFiles) {
         Task {
             if case let .model(id) = item.kind { await models.delete(id) }
-            if case .cleanupModel = item.kind { await localLLM.delete() }
+            if case .cleanupModel = item.kind { await cleanupModel.delete() }
             do {
                 try ModelStorage.delete(item)
                 deleteError = nil
@@ -347,6 +347,10 @@ private struct Provider: Identifiable {
     var id: String { name }
 }
 
+private enum ProviderChoice: Hashable {
+    case apple, local, preset(String), custom
+}
+
 private let providers = [
     Provider(name: "Groq", baseURL: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile"),
     Provider(name: "OpenAI", baseURL: "https://api.openai.com/v1", model: "gpt-4o-mini"),
@@ -361,8 +365,6 @@ private struct AITab: View {
     @State private var testing = false
     @State private var appleStatus = AppleIntelligenceClient.unavailableReason
 
-    private static let apple = "Apple Intelligence"
-    private static let local = "Local"
     private var llm: LLMSettings { controller.settings.llm }
 
     var body: some View {
@@ -375,11 +377,11 @@ private struct AITab: View {
             }
             Section {
                 Picker("Provider", selection: providerBinding) {
-                    Text("Apple Intelligence (on-device)").tag(Self.apple)
-                    Text("\(LocalLLM.displayName) (on this Mac)").tag(Self.local)
+                    Text("Apple Intelligence (on-device)").tag(ProviderChoice.apple)
+                    Text("\(CleanupModel.displayName) (on this Mac)").tag(ProviderChoice.local)
                     Divider()
-                    ForEach(providers) { Text($0.name).tag($0.name) }
-                    Text("Custom (OpenAI-compatible)").tag("Custom")
+                    ForEach(providers) { Text($0.name).tag(ProviderChoice.preset($0.name)) }
+                    Text("Custom (OpenAI-compatible)").tag(ProviderChoice.custom)
                 }
                 if llm.provider == .apple {
                     appleRows
@@ -429,24 +431,26 @@ private struct AITab: View {
         }
     }
 
+    private var files: Installable { controller.localLLM.files }
+
     @ViewBuilder private var localRows: some View {
         Text("Runs an open model inside Parlo: no key, no server, nothing leaves this Mac. Uses about 2.5 GB of memory while selected.")
             .font(.caption).foregroundStyle(.secondary)
         LabeledContent("Model") {
             HStack(spacing: 8) {
-                switch controller.localLLM.state {
+                switch files.state {
                 case .notInstalled:
-                    Button("Download \(LocalLLM.sizeLabel)") { Task { await controller.downloadLocalLLM() } }
+                    Button("Download \(CleanupModel.sizeLabel)") { Task { await files.download() } }
                 case let .downloading(fraction):
                     ProgressView(value: fraction).frame(width: 90)
                     Text("\(Int(fraction * 100))%").monospacedDigit().font(.caption)
-                    Button("Cancel") { controller.localLLM.cancel() }
+                    Button("Cancel") { files.cancel() }
                 case let .failed(message):
                     Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
-                    Button("Retry") { Task { await controller.downloadLocalLLM() } }
+                    Button("Retry") { Task { await files.download() } }
                 case .installed:
                     Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    Button(role: .destructive) { Task { await controller.localLLM.delete() } } label: {
+                    Button(role: .destructive) { Task { await files.delete() } } label: {
                         Image(systemName: "trash")
                     }
                     .help("Delete model files")
@@ -455,27 +459,27 @@ private struct AITab: View {
         }
     }
 
-    private var providerBinding: Binding<String> {
+    private var providerBinding: Binding<ProviderChoice> {
         Binding(
             get: {
-                if llm.provider == .apple { return Self.apple }
-                if llm.provider == .local { return Self.local }
-                return providers.first { $0.baseURL == llm.baseURL }?.name ?? "Custom"
+                switch llm.provider {
+                case .apple: .apple
+                case .local: .local
+                case .openAICompatible: providers.first { $0.baseURL == llm.baseURL }.map { .preset($0.name) } ?? .custom
+                }
             },
-            set: { name in
+            set: { choice in
                 testResult = nil
-                if name == Self.apple {
-                    controller.settings.llm.provider = .apple
-                    return
+                switch choice {
+                case .apple: controller.settings.llm.provider = .apple
+                case .local: controller.settings.llm.provider = .local
+                case .custom: controller.settings.llm.provider = .openAICompatible
+                case let .preset(name):
+                    controller.settings.llm.provider = .openAICompatible
+                    guard let p = providers.first(where: { $0.name == name }) else { return }
+                    controller.settings.llm.baseURL = p.baseURL
+                    controller.settings.llm.model = p.model
                 }
-                if name == Self.local {
-                    controller.settings.llm.provider = .local
-                    return
-                }
-                controller.settings.llm.provider = .openAICompatible
-                guard let p = providers.first(where: { $0.name == name }) else { return }
-                controller.settings.llm.baseURL = p.baseURL
-                controller.settings.llm.model = p.model
             }
         )
     }
@@ -483,11 +487,7 @@ private struct AITab: View {
     private func test() {
         testing = true
         testResult = nil
-        let client: any ChatCompleting = switch llm.provider {
-        case .apple: AppleIntelligenceClient()
-        case .local: LocalLLMClient()
-        case .openAICompatible: LLMClient(settings: llm, apiKey: key.isEmpty ? nil : key)
-        }
+        let client = llm.providerClient(apiKey: key.isEmpty ? nil : key, local: controller.localLLM)
         Task {
             do {
                 let reply = try await client.complete(system: "Reply with the single word OK.", user: "ping", timeout: 10)
@@ -496,8 +496,6 @@ private struct AITab: View {
                 testResult = (false, error.localizedDescription)
             }
             testing = false
-            // The test loaded the local model even if cleanup is off: free it again.
-            if client is LocalLLMClient { controller.syncLocalLLM() }
         }
     }
 }

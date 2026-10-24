@@ -7,23 +7,15 @@ import ParloCore
 enum Qwen3ASRBackend {
     static let repo = "mlx-community/Qwen3-ASR-1.7B-4bit"
 
-    static var directory: URL {
-        SettingsStore.appSupportDirectory.appendingPathComponent("Models/qwen3-asr-1.7b-4bit", isDirectory: true)
-    }
-
-    static var isInstalled: Bool {
-        ["config.json", "model.safetensors", "vocab.json", "merges.txt"].allSatisfy {
-            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
-        }
-    }
+    static var directory: URL { HubSnapshot.directory("qwen3-asr-1.7b-4bit") }
+    static var isInstalled: Bool { HubSnapshot.isInstalled(directory) }
 
     static func install(progress: @escaping @Sendable (Double) -> Void) async throws {
         try await HubSnapshot.install(repo, to: directory, matching: ["*.safetensors", "*.json", "*.txt"], progress: progress)
     }
 
     static func makeTranscriber() async throws -> any Transcriber {
-        MLXCache.limit()
-        return Qwen3ASRTranscriber(model: try await Qwen3ASRModel.fromModelDirectory(directory))
+        Qwen3ASRTranscriber(model: try await Qwen3ASRModel.fromModelDirectory(directory))
     }
 }
 

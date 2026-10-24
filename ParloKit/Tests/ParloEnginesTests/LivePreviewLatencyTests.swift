@@ -19,8 +19,7 @@ struct LivePreviewLatencyTests {
 
     @Test(arguments: [ModelID.parakeetV3, .appleSpeech, .qwen3ASR])
     func previewTicks(id: ModelID) async throws {
-        let installer = EngineInstaller()
-        guard await installer.isInstalled(id) else { return }
+        let installer = try await EngineIntegrationTests.installer(with: id)
         let transcriber = try await installer.makeTranscriber(id)
         let speech = try EngineIntegrationTests.speech(Self.text, voice: "Alice")
         _ = try? await transcriber.transcribe(Array(speech.prefix(16_000)), languageCode: "it", dictionary: [])

@@ -1,109 +1,81 @@
 import Foundation
 import MLX
-import Synchronization
 import MLXLLM
 import MLXLMCommon
 import ParloCore
 import Tokenizers
 
 /// AI cleanup on Qwen3 4B Instruct 2507 (4-bit MLX), run inside Parlo: nothing leaves the Mac, no server needed.
-public enum LocalLLM {
-    static let repo = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
-    public static let displayName = "Qwen3 4B"
-    public static let sizeLabel = "~2.3 GB"
-
-    static var directory: URL {
-        SettingsStore.appSupportDirectory.appendingPathComponent("Models/qwen3-4b-instruct-2507-4bit", isDirectory: true)
+/// Owns the model's files and, while cleanup uses it, the model loaded in memory.
+@MainActor
+public final class LocalLLM {
+    public let files: Installable
+    /// Whether AI cleanup is set to this model: it stays loaded only while it is.
+    public var inUse = false {
+        didSet { sync() }
     }
 
-    static func isInstalled(at directory: URL) -> Bool {
-        ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"].allSatisfy {
-            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
-        }
+    let directory: URL
+    private let loaded = SharedLoad<URL, ModelContainer>()
+
+    public convenience init() {
+        self.init(directory: HubSnapshot.directory(CleanupModel.folder))
     }
 
-    /// Loads the model in the background so the first cleanup is fast. Does nothing until it's downloaded.
-    public static func warmUp() {
-        guard isInstalled(at: directory) else { return }
-        let request = nextRequest()
-        Task { await loaded.warmUp(directory, request: request) }
+    init(directory: URL) {
+        self.directory = directory
+        files = Installable(
+            isInstalled: { HubSnapshot.isInstalled(directory) },
+            install: { try await HubSnapshot.install(
+                CleanupModel.repo, to: directory, matching: ["*.safetensors", "*.json", "*.jinja", "*.txt"], progress: $0
+            ) },
+            uninstall: { try HubSnapshot.uninstall(directory) }
+        )
+        files.onChange = { [weak self] in self?.sync() }
+    }
+
+    public var client: LocalLLMClient { LocalLLMClient(llm: self) }
+
+    func container() async throws -> ModelContainer {
+        guard HubSnapshot.isInstalled(directory) else { throw LocalLLMError.notInstalled }
+        let directory = directory
+        // A one-off call (the connection test) doesn't keep the model in memory.
+        guard inUse else { return try await Self.load(directory) }
+        return try await loaded.value(directory) { try await Self.load(directory) }
     }
 
     /// Frees the memory the model holds, about its size on disk.
-    public static func unload() {
-        let request = nextRequest()
-        Task { await loaded.unload(request: request) }
-    }
-
-    static let loaded = LoadedLLM()
-
-    /// `warmUp` and `unload` hand over to tasks that may run out of order: only the latest call is carried out.
-    private static let requests = Mutex(0)
-
-    private static func nextRequest() -> Int {
-        requests.withLock { $0 += 1; return $0 }
-    }
-
-    static func isLatest(_ request: Int) -> Bool {
-        requests.withLock { $0 == request }
-    }
-}
-
-/// The model kept in memory between cleanups; concurrent callers share one load.
-actor LoadedLLM {
-    private var current: (directory: URL, load: Task<ModelContainer, any Error>)?
-
-    func container(_ directory: URL) async throws -> ModelContainer {
-        if let current, current.directory == directory { return try await current.load.value }
-        let load = Task {
-            MLXCache.limit()
-            return try await LLMModelFactory.shared.loadContainer(from: directory, using: TransformersTokenizerLoader())
-        }
-        current = (directory, load)
-        do {
-            return try await load.value
-        } catch {
-            if current?.directory == directory { current = nil } // let the next cleanup retry
-            throw error
-        }
-    }
-
-    func warmUp(_ directory: URL, request: Int) async {
-        guard LocalLLM.isLatest(request) else { return }
-        _ = try? await container(directory)
-    }
-
-    func unload(request: Int) {
-        guard LocalLLM.isLatest(request) else { return }
-        unload()
-    }
-
-    func unload() {
-        current = nil
+    private func unload() {
+        loaded.clear()
         Memory.clearCache()
+    }
+
+    /// Loads the model in the background so the first cleanup is fast, or frees it when cleanup stops using it.
+    private func sync() {
+        guard inUse, files.state == .installed else {
+            if !loaded.isEmpty { unload() }
+            return
+        }
+        let directory = directory
+        loaded.start(directory) { try await Self.load(directory) }
+    }
+
+    private nonisolated static func load(_ directory: URL) async throws -> ModelContainer {
+        try await LLMModelFactory.shared.loadContainer(from: directory, using: TransformersTokenizerLoader())
     }
 }
 
 /// Cleanup and command mode on the local model.
 public struct LocalLLMClient: ChatCompleting {
-    let directory: URL
-
-    public init() {
-        directory = LocalLLM.directory
-    }
-
-    init(directory: URL) {
-        self.directory = directory
-    }
+    let llm: LocalLLM
 
     public func complete(system: String, user: String, timeout: TimeInterval) async throws -> String {
-        guard LocalLLM.isInstalled(at: directory) else { throw LocalLLMError.notInstalled }
-        let directory = directory
+        let llm = llm
         let reply: String
         do {
             // A load cut short by the timeout keeps going, so the next cleanup finds the model ready.
             reply = try await Deadline.run(seconds: timeout) {
-                let container = try await LocalLLM.loaded.container(directory)
+                let container = try await llm.container()
                 let session = ChatSession(container, instructions: system, generateParameters: GenerateParameters(temperature: 0))
                 return try await session.respond(to: user)
             }
@@ -122,31 +94,8 @@ public enum LocalLLMError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notInstalled: "Download \(LocalLLM.displayName) in Settings → AI"
-        case .timedOut: "\(LocalLLM.displayName) took too long"
-        }
-    }
-}
-
-public struct LocalLLMInstaller: LocalLLMInstalling {
-    public init() {}
-
-    public func isInstalled() async -> Bool {
-        LocalLLM.isInstalled(at: LocalLLM.directory)
-    }
-
-    public func install(progress: @escaping @Sendable (Double) -> Void) async throws {
-        try await HubSnapshot.install(
-            LocalLLM.repo, to: LocalLLM.directory, matching: ["*.safetensors", "*.json", "*.jinja", "*.txt"],
-            progress: progress
-        )
-    }
-
-    public func uninstall() async throws {
-        await LocalLLM.loaded.unload()
-        HubSnapshot.removeLeftovers(of: LocalLLM.directory)
-        if FileManager.default.fileExists(atPath: LocalLLM.directory.path) {
-            try FileManager.default.removeItem(at: LocalLLM.directory)
+        case .notInstalled: "Download \(CleanupModel.displayName) in Settings → AI"
+        case .timedOut: "\(CleanupModel.displayName) took too long"
         }
     }
 }

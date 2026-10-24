@@ -14,7 +14,7 @@ final class AppController {
             do { try store.save(settings) } catch {
                 hud.show(.message("Couldn't save settings: \(error.localizedDescription)", isError: true))
             }
-            if settings.llm != oldValue.llm { syncLocalLLM() }
+            localLLM.inUse = settings.llm.usesLocalModel
         }
     }
     /// Cached so the keychain is read once per launch.
@@ -33,7 +33,7 @@ final class AppController {
     private(set) var fileProgress: [String: Double] = [:]
     var settingsTab: SettingsTab = .general
     let models: ModelManager
-    let localLLM = LocalLLMManager(installer: LocalLLMInstaller())
+    let localLLM = LocalLLM()
 
     private let store: SettingsStore
     private let hud = HUDController()
@@ -94,7 +94,7 @@ final class AppController {
         recorder.onFailure = { [weak self] reason in self?.microphoneFailed(reason) }
         history.markInterrupted()
         recent = history.entries()
-        EngineInstaller.removeUnfinishedDownloads()
+        EngineInstaller.prepare()
         startHotkey()
         Task {
             await models.refresh()
@@ -102,8 +102,8 @@ final class AppController {
             if !settings.hasCompletedOnboarding { await installRecommendedModel() }
         }
         Task { speechDetector = try? await SileroSpeechDetector.load() }
-        Task { await localLLM.refresh() }
-        syncLocalLLM()
+        localLLM.inUse = settings.llm.usesLocalModel
+        Task { await localLLM.files.refresh() }
         if !settings.hasCompletedOnboarding || !Permissions.allGranted { showOnboarding() }
     }
 
@@ -131,30 +131,10 @@ final class AppController {
         tapRetryTimer = nil
     }
 
-    /// Cleanup is on but a cloud provider has no key yet, so every call would fail.
-    var aiNeedsKey: Bool {
-        settings.llm.enabled && settings.llm.provider == .openAICompatible
-            && apiKey == nil && !settings.llm.baseURL.contains("localhost")
-    }
+    var llm: (any ChatCompleting)? { settings.llm.client(apiKey: apiKey, local: localLLM) }
 
-    var llm: (any ChatCompleting)? {
-        guard settings.llm.enabled else { return nil }
-        return switch settings.llm.provider {
-        case .apple: AppleIntelligenceClient()
-        case .local: LocalLLMClient()
-        case .openAICompatible: LLMClient(settings: settings.llm, apiKey: apiKey)
-        }
-    }
-
-    /// The local model stays in memory while cleanup uses it, so only the first cleanup waits for it to load.
-    func syncLocalLLM() {
-        if settings.llm.enabled && settings.llm.provider == .local { LocalLLM.warmUp() } else { LocalLLM.unload() }
-    }
-
-    func downloadLocalLLM() async {
-        await localLLM.download()
-        syncLocalLLM()
-    }
+    /// Why AI cleanup would fail right now; nil when it can run or is off.
+    var aiProblem: String? { settings.llm.problem(apiKey: apiKey, local: localLLM) }
 
     var statusText: String {
         switch phase {

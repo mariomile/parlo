@@ -1,8 +1,20 @@
 import Foundation
 import HuggingFace
+import ParloCore
 
 /// Downloads a Hugging Face repo into Parlo's own Models folder.
 enum HubSnapshot {
+    static var root: URL { SettingsStore.appSupportDirectory.appendingPathComponent("Models", isDirectory: true) }
+
+    static func directory(_ folder: String) -> URL {
+        root.appendingPathComponent(folder, isDirectory: true)
+    }
+
+    /// Downloads only ever move a complete folder into place, so a folder that exists is a finished download.
+    static func isInstalled(_ directory: URL) -> Bool {
+        FileManager.default.fileExists(atPath: directory.path)
+    }
+
     /// Files land in `<folder>.partial` first and move to `directory` when complete, so a half-finished download never
     /// counts as installed. The Hub client copies the snapshot out of its cache, so the cache lives next to the
     /// download and is deleted afterwards.
@@ -28,11 +40,21 @@ enum HubSnapshot {
         try fm.moveItem(at: partial, to: directory)
     }
 
-    /// Quitting Parlo mid-download leaves these folders behind, up to the model's size.
-    static func removeLeftovers(of directory: URL) {
+    static func uninstall(_ directory: URL) throws {
         let (partial, scratchCache) = leftovers(of: directory)
         try? FileManager.default.removeItem(at: partial)
         try? FileManager.default.removeItem(at: scratchCache)
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    /// Quitting Parlo mid-download leaves these folders behind, up to the model's size.
+    static func removeLeftovers() {
+        let children = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        for child in children where ["partial", "cache"].contains(child.pathExtension) {
+            try? FileManager.default.removeItem(at: child)
+        }
     }
 
     private static func leftovers(of directory: URL) -> (partial: URL, cache: URL) {

@@ -7,7 +7,7 @@ public struct StoredFiles: Identifiable, Sendable {
     public enum Kind: Sendable {
         /// A voice model from the catalog; delete it through `ModelManager` so its state updates.
         case model(ModelID)
-        /// The on-device AI cleanup model; delete it through `LocalLLMManager` so its state updates.
+        /// The on-device AI cleanup model; delete it through `LocalLLM.files` so its state updates.
         case cleanupModel
         /// The small model that recognises your dictionary words with Parakeet. Downloads again when needed.
         case vocabulary
@@ -44,7 +44,7 @@ public enum ModelStorage {
         for info in ModelCatalog.all {
             if let dir = EngineInstaller.directory(info.id) { add(dir, info.displayName, .model(info.id)) }
         }
-        add(LocalLLM.directory, LocalLLM.displayName, .cleanupModel)
+        add(HubSnapshot.directory(CleanupModel.folder), CleanupModel.displayName, .cleanupModel)
         add(CtcModels.defaultCacheDirectory(for: .ctc110m), "Vocabulary booster", .vocabulary)
         add(MLModelConfigurationUtils.defaultModelsDirectory(for: .vad), "Voice detection", .voiceDetection)
         for root in [fluidAudioRoot, whisperRoot] {

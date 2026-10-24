@@ -27,24 +27,28 @@ struct LocalLLMBenchmarkTests {
     static var directories: [URL] {
         let extra = (ProcessInfo.processInfo.environment["PARLO_LLM_DIRS"] ?? "").split(separator: ",")
             .map { URL(fileURLWithPath: String($0), isDirectory: true) }
-        return [LocalLLM.directory] + extra
+        return [HubSnapshot.directory(CleanupModel.folder)] + extra
     }
 
-    @Test(arguments: directories)
+    @MainActor @Test(arguments: directories)
     func cleanup(directory: URL) async throws {
         let name = directory.lastPathComponent
-        if directory == LocalLLM.directory, !LocalLLM.isInstalled(at: directory) {
-            guard EngineIntegrationTests.toDownload.contains("localLLM") else { return }
+        let llm = LocalLLM(directory: directory)
+        if !HubSnapshot.isInstalled(directory) {
+            guard directory == HubSnapshot.directory(CleanupModel.folder),
+                  EngineIntegrationTests.toDownload.contains("localLLM")
+            else { try Test.cancel("\(name) is not installed") }
             let start = ContinuousClock.now
-            try await LocalLLMInstaller().install { _ in }
+            await llm.files.download()
+            try #require(llm.files.state == .installed)
             print("[llm \(name)] download: \(ContinuousClock.now - start)")
         }
-        guard LocalLLM.isInstalled(at: directory) else { return }
-        let client = LocalLLMClient(directory: directory)
+        llm.inUse = true
+        let client = llm.client
         let system = PromptBuilder.cleanupSystemPrompt(style: .neutral, dictionary: [], hasPlaceholders: false)
 
         var start = ContinuousClock.now
-        _ = try await LocalLLM.loaded.container(directory)
+        _ = try await llm.container()
         print("[llm \(name)] load: \(ContinuousClock.now - start)")
         start = ContinuousClock.now
         _ = try await client.complete(system: system, user: PromptBuilder.cleanupUserMessage("Prova."), timeout: 60)
@@ -86,6 +90,9 @@ struct LocalLLMBenchmarkTests {
         }
         print(String(format: "[llm %@] cleanup: mean %.2fs, worst %.2fs, %d/%d in time, %d accepted",
                      name, total / Double(max(answered, 1)), worst, answered, Self.transcripts.count, accepted))
-        await LocalLLM.loaded.unload()
+        llm.inUse = false
+        // What dictation needs from the model: every cleanup back in time, and each one usable.
+        #expect(answered == Self.transcripts.count, "\(name): \(answered)/\(Self.transcripts.count) in time")
+        #expect(accepted == answered, "\(name): \(answered - accepted) rejected")
     }
 }

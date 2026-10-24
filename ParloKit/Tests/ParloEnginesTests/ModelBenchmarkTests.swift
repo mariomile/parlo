@@ -26,8 +26,7 @@ struct ModelBenchmarkTests {
 
     @Test(arguments: ModelID.allCases)
     func benchmark(id: ModelID) async throws {
-        let installer = EngineInstaller()
-        guard await installer.isInstalled(id) else { return }
+        let installer = try await EngineIntegrationTests.installer(with: id)
         let transcriber = try await installer.makeTranscriber(id)
         let info = ModelCatalog.info(id)
         // The first run compiles and warms the model; it isn't what a dictation costs.

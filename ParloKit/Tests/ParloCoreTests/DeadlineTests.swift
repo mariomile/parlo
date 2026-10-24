@@ -12,20 +12,24 @@ import Testing
     }
 
     @Test func givesUpOnAnOperationThatNeverReturns() async {
+        let stop = LockedBox(false)
+        defer { stop.value = true }
         let start = Date.now
         await #expect(throws: DeadlineExceeded(seconds: 0.2)) {
             try await Deadline.run(seconds: 0.2) {
-                // Ignores cancellation, like a wedged model.
-                while true { try? await Task.sleep(for: .seconds(1)) }
+                // Ignores cancellation, like a wedged model; ends only after the test.
+                while !stop.value { try? await Task.sleep(for: .milliseconds(10)) }
             }
         }
         #expect(Date.now.timeIntervalSince(start) < 2)
     }
 
     @Test func cancellingTheCallerStopsTheWait() async {
+        let stop = LockedBox(false)
+        defer { stop.value = true }
         let task = Task {
             try await Deadline.run(seconds: 60) {
-                while true { try? await Task.sleep(for: .seconds(1)) }
+                while !stop.value { try? await Task.sleep(for: .milliseconds(10)) }
             }
         }
         try? await Task.sleep(for: .milliseconds(50))

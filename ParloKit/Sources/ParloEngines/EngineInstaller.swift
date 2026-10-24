@@ -29,15 +29,14 @@ public struct EngineInstaller: ModelInstaller {
 
     public func uninstall(_ id: ModelID) async throws {
         guard let dir = Self.directory(id) else { return }
-        HubSnapshot.removeLeftovers(of: dir)
-        if FileManager.default.fileExists(atPath: dir.path) {
-            try FileManager.default.removeItem(at: dir)
-        }
+        try HubSnapshot.uninstall(dir)
     }
 
-    /// Run at launch, when no download is in progress: one Parlo quit in the middle of leaves files behind.
-    public static func removeUnfinishedDownloads() {
-        for dir in [Qwen3ASRBackend.directory, LocalLLM.directory] { HubSnapshot.removeLeftovers(of: dir) }
+    /// Run once at launch, before any model loads or downloads.
+    public static func prepare() {
+        // Files left by a download Parlo quit in the middle of.
+        HubSnapshot.removeLeftovers()
+        MLXCache.limit()
     }
 
     /// Where a model's files live; nil for models macOS manages.

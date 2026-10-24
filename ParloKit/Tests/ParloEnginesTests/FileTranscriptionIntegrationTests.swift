@@ -1,10 +1,12 @@
 import Foundation
 import ParloCore
+import Synchronization
 import Testing
 @testable import ParloEngines
 
 /// Decodes real audio files and transcribes them with real models, the way "Transcribe File…" does.
-/// Run with `PARLO_INTEGRATION=1 swift test --filter FileTranscriptionIntegrationTests`. Models not installed are skipped.
+/// Run with `PARLO_INTEGRATION=1 swift test --filter FileTranscriptionIntegrationTests`. Models not installed are skipped
+/// (see EngineIntegrationTests).
 /// `PARLO_LONG_MINUTES` sets the length of the long file (default 10).
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["PARLO_INTEGRATION"] == "1"))
 struct FileTranscriptionIntegrationTests {
@@ -60,8 +62,7 @@ struct FileTranscriptionIntegrationTests {
     }
 
     func run(_ id: ModelID, file url: URL, reference: String) async throws {
-        let installer = EngineInstaller()
-        guard await installer.isInstalled(id) else { return }
+        let installer = try await EngineIntegrationTests.installer(with: id)
         let transcriber = try await installer.makeTranscriber(id)
 
         let decodeStart = ContinuousClock.now
@@ -69,8 +70,8 @@ struct FileTranscriptionIntegrationTests {
         let decodeTime = ContinuousClock.now - decodeStart
         let seconds = Double(samples.count) / 16_000
 
-        let lastProgress = LockedProgress()
-        let chunked = ChunkedTranscriber(base: transcriber) { lastProgress.value = $0 }
+        let lastProgress = LastProgress()
+        let chunked = ChunkedTranscriber(base: transcriber) { fraction in lastProgress.value.withLock { $0 = fraction } }
         var settings = AppSettings.default
         settings.languageCode = "it"
         let start = ContinuousClock.now
@@ -79,8 +80,7 @@ struct FileTranscriptionIntegrationTests {
             outcome = try await DictationPipeline(transcriber: chunked, llm: nil, settings: settings)
                 .run(samples: samples, bundleID: nil)
         } catch let TranscriptionError.assetsInstalling(locale) {
-            print("[\(id.rawValue)] skipped, system assets for \(locale) not installed")
-            return
+            try Test.cancel("system assets for \(locale) not installed")
         }
         let wall = ContinuousClock.now - start
         guard case let .inserted(text, _) = outcome else {
@@ -92,12 +92,12 @@ struct FileTranscriptionIntegrationTests {
         print("""
         [\(id.rawValue)] \(url.lastPathComponent): \(String(format: "%.1f", seconds)) s audio, decode \(decodeTime), \
         transcribe \(wall) (\(String(format: "%.1f", 1 / rtf))x realtime), \(Self.words(text).count) words, \
-        recall \(String(format: "%.2f", recall)), progress \(lastProgress.value), peak RSS \(Self.peakMemoryMB()) MB
+        recall \(String(format: "%.2f", recall)), progress \(lastProgress.value.withLock { $0 }), peak RSS \(Self.peakMemoryMB()) MB
         [\(id.rawValue)]   start: \(text.prefix(110))
         [\(id.rawValue)]   end:   \(text.suffix(110))
         """)
         #expect(recall > 0.85, "\(id.rawValue) recall \(recall)")
-        #expect(lastProgress.value == 1)
+        #expect(lastProgress.value.withLock { $0 } == 1)
     }
 
     @Test(arguments: ModelID.allCases)
@@ -111,7 +111,7 @@ struct FileTranscriptionIntegrationTests {
 
     @Test(arguments: ModelID.allCases)
     func longFile(id: ModelID) async throws {
-        guard await EngineInstaller().isInstalled(id) else { return }
+        _ = try await EngineIntegrationTests.installer(with: id)
         let minutes = Double(ProcessInfo.processInfo.environment["PARLO_LONG_MINUTES"] ?? "") ?? 10
         // About 170 spoken words a minute; the sentences are numbered by repetition so the transcript can't skip a block unnoticed.
         let target = Int(minutes * 170)
@@ -128,11 +128,6 @@ struct FileTranscriptionIntegrationTests {
     }
 }
 
-private final class LockedProgress: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored = 0.0
-    var value: Double {
-        get { lock.withLock { stored } }
-        set { lock.withLock { stored = newValue } }
-    }
+private final class LastProgress: Sendable {
+    let value = Mutex(0.0)
 }

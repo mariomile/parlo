@@ -94,3 +94,11 @@ public protocol ModelInstaller: Sendable {
     func uninstall(_ id: ModelID) async throws
     func makeTranscriber(_ id: ModelID) async throws -> any Transcriber
 }
+
+/// The on-device model for AI cleanup and command mode.
+public enum CleanupModel {
+    public static let repo = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    public static let folder = "qwen3-4b-instruct-2507-4bit"
+    public static let displayName = "Qwen3 4B"
+    public static let sizeLabel = "~2.3 GB"
+}
