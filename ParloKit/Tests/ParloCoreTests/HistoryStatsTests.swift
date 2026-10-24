@@ -4,20 +4,17 @@ import Testing
 
 @Suite struct HistoryStatsTests {
     func entry(
-        _ text: String?, seconds: Double, status: HistoryEntry.Status = .done, command: Bool = false, file: String? = nil
+        _ text: String?, seconds: Double, status: HistoryEntry.Status = .done, kind: HistoryEntry.Kind = .dictation
     ) -> HistoryEntry {
-        HistoryEntry(
-            id: UUID().uuidString, date: .now, duration: seconds, command: command, status: status, text: text,
-            hasAudio: false, fileName: file
-        )
+        HistoryEntry(id: UUID().uuidString, date: .now, duration: seconds, kind: kind, status: status, text: text, hasAudio: false)
     }
 
     @Test func countsOnlyFinishedDictations() {
         let stats = HistoryStats([
             entry("one two three", seconds: 2),
             entry("four  five\nsix seven", seconds: 3),
-            entry("rewritten text", seconds: 1, command: true),
-            entry("a whole transcript here", seconds: 600, file: "memo.m4a"),
+            entry("rewritten text", seconds: 1, kind: .command(selection: nil)),
+            entry("a whole transcript here", seconds: 600, kind: .file(name: "memo.m4a")),
             entry(nil, seconds: 5, status: .nothingHeard),
             entry(nil, seconds: 5, status: .failed("x")),
         ])
@@ -43,7 +40,7 @@ import Testing
             entry("ciao a tutti", seconds: 2),
             entry(nil, seconds: 1, status: .nothingHeard),
             entry(nil, seconds: 1, status: .failed("no model")),
-            entry("from a file", seconds: 61, file: "memo.m4a"),
+            entry("from a file", seconds: 61, kind: .file(name: "memo.m4a")),
         ])
         #expect(md.hasPrefix("# Parlo history"))
         #expect(md.contains("ciao a tutti"))

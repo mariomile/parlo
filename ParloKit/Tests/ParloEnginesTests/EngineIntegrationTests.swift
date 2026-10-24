@@ -67,7 +67,7 @@ struct EngineIntegrationTests {
         var rng = SystemRandomNumberGenerator()
         let noise = (0..<32_000).map { _ in Float.random(in: -0.018...0.018, using: &rng) }
         #expect(try await !detector.containsSpeech(noise))
-        #expect(try await !detector.containsSpeech([Float](repeating: 0, count: 16_000)))
+        #expect(try await !detector.containsSpeech([Float](repeating: 0, count: Audio.sampleRate)))
         let speech = try Self.speech("Allora, mandami il file entro stasera.", voice: "Alice")
         #expect(try await detector.containsSpeech(speech))
         // Quiet or distant speech, peaking around 0.05 like a soft voice on a MacBook mic.
@@ -113,7 +113,7 @@ struct EngineIntegrationTests {
             try Test.cancel("system assets for \(locale) not installed")
         }
         let wall = ContinuousClock.now - start
-        print("[\(info.id.rawValue)] \(language): \(result) (audio \(String(format: "%.2f", Double(samples.count) / 16_000)) s, wall \(wall))")
+        print("[\(info.id.rawValue)] \(language): \(result) (audio \(String(format: "%.2f", Audio.seconds(samples.count))) s, wall \(wall))")
         #expect(result.lowercased().contains(word), "\(info.displayName): \(result)")
     }
 
@@ -121,7 +121,7 @@ struct EngineIntegrationTests {
         let installer = try await Self.installer(with: .cohereTranscribe)
         let t = try await installer.makeTranscriber(.cohereTranscribe)
         await #expect(throws: TranscriptionError.languageRequired("Cohere Transcribe")) {
-            try await t.transcribe([Float](repeating: 0, count: 16_000), languageCode: nil, dictionary: [])
+            try await t.transcribe([Float](repeating: 0, count: Audio.sampleRate), languageCode: nil, dictionary: [])
         }
     }
 

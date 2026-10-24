@@ -19,17 +19,14 @@ public struct AppleIntelligenceClient: ChatCompleting {
 
     public func complete(system: String, user: String, timeout: TimeInterval) async throws -> String {
         if let reason = Self.unavailableReason { throw AppleIntelligenceError.unavailable(reason) }
-        let reply = try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask {
+        let reply: String
+        do {
+            reply = try await Deadline.run(seconds: timeout) {
                 let session = LanguageModelSession(instructions: system)
                 return try await session.respond(to: user, options: GenerationOptions(temperature: 0)).content
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw AppleIntelligenceError.timedOut
-            }
-            defer { group.cancelAll() }
-            return try await group.next()!
+        } catch is DeadlineExceeded {
+            throw AppleIntelligenceError.timedOut
         }
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LLMError.emptyResponse }

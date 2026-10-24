@@ -22,13 +22,13 @@ struct LivePreviewLatencyTests {
         let installer = try await EngineIntegrationTests.installer(with: id)
         let transcriber = try await installer.makeTranscriber(id)
         let speech = try EngineIntegrationTests.speech(Self.text, voice: "Alice")
-        _ = try? await transcriber.transcribe(Array(speech.prefix(16_000)), languageCode: "it", dictionary: [])
+        _ = try? await transcriber.transcribe(Array(speech.prefix(Audio.sampleRate)), languageCode: "it", dictionary: [])
 
-        let window = Int(LivePreview.windowSeconds * 16_000)
+        let window = Audio.sampleCount(LivePreview.windowSeconds)
         var latencies: [Double] = []
         var last = ""
-        for seconds in 1...(speech.count / 16_000) {
-            let captured = speech.prefix(seconds * 16_000)
+        for seconds in 1...(speech.count / Audio.sampleRate) {
+            let captured = speech.prefix(seconds * Audio.sampleRate)
             let start = ContinuousClock.now
             do {
                 last = try await transcriber.transcribe(Array(captured.suffix(window)), languageCode: "it", dictionary: [])
@@ -46,7 +46,7 @@ struct LivePreviewLatencyTests {
         // For comparison: transcribing everything captured, which is what an unwindowed preview would cost at the end.
         let start = ContinuousClock.now
         _ = try await transcriber.transcribe(speech, languageCode: "it", dictionary: [])
-        print(String(format: "[preview %@] whole %.0f s: %.0f ms", id.rawValue, Double(speech.count) / 16_000,
+        print(String(format: "[preview %@] whole %.0f s: %.0f ms", id.rawValue, Audio.seconds(speech.count),
                      (ContinuousClock.now - start) / .milliseconds(1)))
         #expect(!last.isEmpty)
     }

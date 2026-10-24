@@ -50,7 +50,7 @@ struct ModelBenchmarkTests {
                     break
                 }
                 elapsed += (ContinuousClock.now - start) / .seconds(1)
-                audio += Double(samples.count) / 16_000
+                audio += Audio.seconds(samples.count)
                 let reference = Self.words(phrase)
                 errors += Self.editDistance(reference, Self.words(text))
                 words += reference.count

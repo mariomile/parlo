@@ -61,7 +61,7 @@ struct LocalLLMBenchmarkTests {
             do {
                 output = try await client.complete(
                     system: system, user: PromptBuilder.cleanupUserMessage(transcript),
-                    timeout: DictationPipeline.cleanupTimeout(for: transcript)
+                    timeout: TranscriptionJob.cleanupTimeout(for: transcript)
                 )
             } catch {
                 print("[llm \(name)] \(transcript) -> \(error.localizedDescription)")
@@ -84,7 +84,7 @@ struct LocalLLMBenchmarkTests {
             let command = try await client.complete(
                 system: PromptBuilder.commandSystemPrompt(),
                 user: PromptBuilder.commandUserMessage(instruction: instruction, selection: selection),
-                timeout: CommandPipeline.timeout
+                timeout: TranscriptionJob.commandTimeout
             )
             print("[llm \(name)] command \(ContinuousClock.now - start): \(command)")
         }

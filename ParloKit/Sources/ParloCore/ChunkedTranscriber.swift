@@ -2,7 +2,6 @@ import Foundation
 
 /// Cuts long audio into pieces at its quietest moments, so no engine sees more than about a minute at once.
 public enum AudioChunker {
-    public static let sampleRate = 16_000
     /// Frames of 50 ms are compared to find the quietest.
     private static let frame = 800
 
@@ -11,9 +10,9 @@ public enum AudioChunker {
     public static func ranges(
         _ samples: [Float], maxSeconds: Double = 60, searchSeconds: Double = 10, minTailSeconds: Double = 1
     ) -> [Range<Int>] {
-        let maxCount = Int(maxSeconds * Double(sampleRate))
-        let search = min(Int(searchSeconds * Double(sampleRate)), maxCount / 2)
-        let minTail = Int(minTailSeconds * Double(sampleRate))
+        let maxCount = Audio.sampleCount(maxSeconds)
+        let search = min(Audio.sampleCount(searchSeconds), maxCount / 2)
+        let minTail = Audio.sampleCount(minTailSeconds)
         var ranges: [Range<Int>] = []
         var start = 0
         while samples.count - start > maxCount + minTail {
@@ -61,9 +60,4 @@ public struct ChunkedTranscriber: Transcriber {
         }
         return parts.joined(separator: " ")
     }
-}
-
-public enum FileTranscription {
-    /// AI cleanup has a few seconds to answer and is written for a sentence or two: longer audio skips it.
-    public static let cleanupMaxSeconds = 30.0
 }

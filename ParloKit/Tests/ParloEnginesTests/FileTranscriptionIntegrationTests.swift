@@ -68,22 +68,22 @@ struct FileTranscriptionIntegrationTests {
         let decodeStart = ContinuousClock.now
         let samples = try await AudioFileDecoder.decode(url)
         let decodeTime = ContinuousClock.now - decodeStart
-        let seconds = Double(samples.count) / 16_000
+        let seconds = Audio.seconds(samples.count)
 
         let lastProgress = LastProgress()
         let chunked = ChunkedTranscriber(base: transcriber) { fraction in lastProgress.value.withLock { $0 = fraction } }
         var settings = AppSettings.default
         settings.languageCode = "it"
         let start = ContinuousClock.now
-        let outcome: DictationOutcome
+        let outcome: JobOutcome
         do {
-            outcome = try await DictationPipeline(transcriber: chunked, llm: nil, settings: settings)
-                .run(samples: samples, bundleID: nil)
+            outcome = try await TranscriptionJob(transcriber: chunked, llm: nil, settings: settings, speech: nil)
+                .run(samples, .dictation(bundleID: nil))
         } catch let TranscriptionError.assetsInstalling(locale) {
             try Test.cancel("system assets for \(locale) not installed")
         }
         let wall = ContinuousClock.now - start
-        guard case let .inserted(text, _) = outcome else {
+        guard case let .text(text, _) = outcome else {
             Issue.record("\(id.rawValue): \(outcome)")
             return
         }

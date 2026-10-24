@@ -15,7 +15,7 @@ public enum AudioFileError: Error, Equatable, LocalizedError {
 
 /// Reads any audio file macOS can open (m4a, mp3, wav, aiff, caf...) as the 16 kHz mono Float32 the engines take.
 public enum AudioFileDecoder {
-    static let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    static let target = Audio.format
     /// Source frames read at a time, so a long file is never held in memory in its original format.
     private static let block: AVAudioFrameCount = 65_536
 

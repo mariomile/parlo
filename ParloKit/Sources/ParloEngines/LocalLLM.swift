@@ -12,7 +12,7 @@ public final class LocalLLM {
     public let files: Installable
     /// Whether AI cleanup is set to this model: it stays loaded only while it is.
     public var inUse = false {
-        didSet { sync() }
+        didSet { if inUse != oldValue { sync() } }
     }
 
     let directory: URL

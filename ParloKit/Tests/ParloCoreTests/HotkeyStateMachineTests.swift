@@ -159,19 +159,6 @@ import Testing
         #expect(m.handle(fn: true, ctrl: false, at: 600) == .startDictation)
     }
 
-    @Test func isHandsFreeTracksTheLock() {
-        var m = HotkeyStateMachine()
-        _ = m.handle(fn: true, ctrl: false, at: 0)
-        #expect(!m.isHandsFree)
-        _ = m.handle(fn: false, ctrl: false, at: 0.1)
-        _ = m.handle(fn: true, ctrl: false, at: 0.3)
-        #expect(m.isHandsFree)
-        _ = m.handle(fn: false, ctrl: false, at: 0.4)
-        #expect(m.isHandsFree)
-        _ = m.handle(fn: true, ctrl: false, at: 5)
-        #expect(!m.isHandsFree)
-    }
-
     // MARK: Poll
 
     @Test func missedReleaseStopsAHeldDictation() {
@@ -216,7 +203,6 @@ import Testing
         // The tap never saw the release; the keyboard says fn is up.
         #expect(m.poll(fnHeld: false, at: 50) == nil)
         #expect(m.poll(fnHeld: false, at: 50.6) == nil)
-        #expect(m.isHandsFree)
         #expect(m.handle(fn: true, ctrl: false, at: 20) == .stop)
         #expect(m.handle(fn: false, ctrl: false, at: 20.1) == nil)
     }
@@ -246,7 +232,6 @@ import Testing
         #expect(m.poll(fnHeld: false, at: 5000) == nil)
         #expect(m.poll(fnHeld: false, at: 5000 + HotkeyStateMachine.handsFreeLimit - 1) == nil)
         #expect(m.poll(fnHeld: false, at: 5000 + HotkeyStateMachine.handsFreeLimit) == .stop)
-        #expect(!m.isHandsFree)
         #expect(m.handle(fn: true, ctrl: false, at: 700) == .startDictation)
     }
 

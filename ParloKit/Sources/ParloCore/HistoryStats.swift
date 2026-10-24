@@ -13,7 +13,7 @@ public struct HistoryStats: Equatable, Sendable {
     public let speakingSeconds: Double
 
     public init(_ entries: [HistoryEntry]) {
-        let spoken = entries.filter { $0.status == .done && !$0.command && $0.fileName == nil }
+        let spoken = entries.filter { $0.status == .done && $0.kind == .dictation }
         dictations = spoken.count
         words = spoken.reduce(0) { $0 + $1.wordCount }
         speakingSeconds = spoken.reduce(0) { $0 + $1.duration }
@@ -33,8 +33,7 @@ public enum HistoryExport {
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         var out = "# Parlo history\n"
         for entry in entries {
-            let kind = entry.fileName.map { "File: \($0)" } ?? (entry.command ? "Command" : "Dictation")
-            out += "\n## \(formatter.string(from: entry.date)) · \(Int(entry.duration.rounded())) s · \(kind)\n\n"
+            out += "\n## \(formatter.string(from: entry.date)) · \(Int(entry.duration.rounded())) s · \(entry.label)\n\n"
             switch entry.status {
             case .done: out += (entry.text ?? "") + "\n"
             case .processing: out += "_Still transcribing._\n"

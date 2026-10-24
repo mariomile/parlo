@@ -65,9 +65,7 @@ actor AssetInstalls {
 }
 
 enum AudioBuffers {
-    static let sourceFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
-    )!
+    static let sourceFormat = Audio.format
 
     /// 16 kHz mono Float32 samples converted to `format` (or left as is when nil).
     static func make(samples: [Float], format: AVAudioFormat?) throws -> AVAudioPCMBuffer {

@@ -58,14 +58,6 @@ public struct HotkeyStateMachine: Sendable {
 
     public init() {}
 
-    /// True while a double-tap recording runs without Fn held.
-    public var isHandsFree: Bool {
-        switch state {
-        case .lockedHeld, .locked: true
-        default: false
-        }
-    }
-
     public mutating func handle(fn: Bool, ctrl: Bool, at time: Double) -> HotkeyAction? {
         switch (state, fn) {
         case let (.idle(tap), true):

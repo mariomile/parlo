@@ -22,9 +22,6 @@ public enum Deadline {
             race.finish(.failure(CancellationError()))
         }
     }
-
-    /// Time allowed to transcribe and clean up `duration` seconds of audio: slower than every engine we ship.
-    public static func forAudio(duration: Double) -> Double { 30 + duration }
 }
 
 /// The work and the timer: the first to finish resumes the caller and cancels the other.
