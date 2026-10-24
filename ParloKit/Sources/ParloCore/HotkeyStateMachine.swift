@@ -27,8 +27,9 @@ public struct HotkeyStateMachine: Sendable {
     public static let doubleTapWindow: Double = 0.25
     /// Fn reported up by polls for this long means its release was missed by the event tap.
     public static let missedRelease: Double = 0.5
-    /// A hands-free recording is stopped after this long.
-    public static let handsFreeLimit: Double = 10 * 60
+    /// A recording is stopped after this long, held or hands-free: a release the poller can't see
+    /// (keyboards whose Fn it never reports) must not leave the microphone on for good.
+    public static let recordingLimit: Double = 10 * 60
 
     private struct Tap {
         var releasedAt: Double
@@ -50,15 +51,21 @@ public struct HotkeyStateMachine: Sendable {
     private struct Polls {
         var sawFnHeld = false
         var fnUpSince: Double?
-        var handsFreeSince: Double?
+        var startedAt: Double?
     }
 
     private var state = State.idle(lastTap: nil)
     private var polls = Polls()
+    /// Fn as the last event reported it.
+    private var fnDown = false
 
     public init() {}
 
-    public mutating func handle(fn: Bool, ctrl: Bool, at time: Double) -> HotkeyAction? {
+    /// `fnKey`: the event is the Fn key's own. Any other modifier (Shift, Option) reports Fn unchanged and does
+    /// nothing; the Fn key reporting Fn still down means its release was missed.
+    public mutating func handle(fn: Bool, ctrl: Bool, at time: Double, fnKey: Bool = true) -> HotkeyAction? {
+        defer { fnDown = fn }
+        if fn == fnDown, !fnKey { return nil }
         switch (state, fn) {
         case let (.idle(tap), true):
             polls = Polls()
@@ -113,8 +120,19 @@ public struct HotkeyStateMachine: Sendable {
     /// tap missed. `time` is the poller's clock. Call it regularly while recording.
     /// - Held: Fn seen down, then up continuously for `missedRelease` stops the recording.
     /// - Second press of a double tap: Fn up for `missedRelease` makes it hands-free, so the next press stops it.
-    /// - Hands-free: after `handsFreeLimit` the recording stops.
+    /// - Any recording stops after `recordingLimit`.
     public mutating func poll(fnHeld: Bool, at time: Double) -> HotkeyAction? {
+        switch state {
+        case .idle, .cancelled: return nil
+        case .held, .lockedHeld, .locked: break
+        }
+        let start = polls.startedAt ?? time
+        polls.startedAt = start
+        if time - start >= Self.recordingLimit {
+            // If Fn is down, its release must not do anything.
+            state = fnHeld ? .cancelled : .idle(lastTap: nil)
+            return .stop
+        }
         switch state {
         case .held:
             if fnHeld {
@@ -124,26 +142,16 @@ public struct HotkeyStateMachine: Sendable {
                 state = .idle(lastTap: nil)
                 return .stop
             }
-            return nil
-        case .lockedHeld, .locked:
-            let start = polls.handsFreeSince ?? time
-            polls.handsFreeSince = start
-            if time - start >= Self.handsFreeLimit {
-                // If Fn is down, its release must not do anything.
-                state = fnHeld ? .cancelled : .idle(lastTap: nil)
-                return .stop
+        case .lockedHeld:
+            if fnHeld {
+                polls.fnUpSince = nil
+            } else if fnUpLongEnough(at: time) {
+                state = .locked
             }
-            if case .lockedHeld = state {
-                if fnHeld {
-                    polls.fnUpSince = nil
-                } else if fnUpLongEnough(at: time) {
-                    state = .locked
-                }
-            }
-            return nil
-        case .idle, .cancelled:
-            return nil
+        default:
+            break
         }
+        return nil
     }
 
     private mutating func fnUpLongEnough(at time: Double) -> Bool {

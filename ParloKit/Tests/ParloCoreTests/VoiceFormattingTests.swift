@@ -18,6 +18,11 @@ import Testing
         )
     }
 
+    @Test func commandsBackToBack() {
+        #expect(VoiceFormatting.apply("Ciao. Nuovo paragrafo. Punto elenco latte.") == "Ciao.\n\n- Latte.")
+        #expect(VoiceFormatting.apply("Fatto. A capo. A capo. Poi") == "Fatto.\n\nPoi")
+    }
+
     @Test func atTheStart() {
         #expect(VoiceFormatting.apply("A capo. Ecco il resto") == "\nEcco il resto")
     }

@@ -37,7 +37,10 @@ public struct TranscriptionJob: Sendable {
     }
 
     /// Time the engine gets for `seconds` of audio: slower than every engine we ship.
-    var transcriptionDeadline: @Sendable (_ seconds: Double) -> Double = { 30 + $0 }
+    /// nil when the transcriber keeps its own deadlines, as `BackgroundTranscriber` does per piece.
+    public var transcriptionDeadline: (@Sendable (_ seconds: Double) -> Double)? = Self.engineDeadline
+
+    public static let engineDeadline: @Sendable (_ seconds: Double) -> Double = { 30 + $0 }
 
     let transcriber: any Transcriber
     let llm: (any ChatCompleting)?
@@ -56,10 +59,24 @@ public struct TranscriptionJob: Sendable {
 
     /// Throws `DeadlineExceeded` when the engine stops answering, so one stuck job can't hold the queue.
     /// The LLM calls have their own timeouts.
+    /// Longest the speech check may take before the recording is transcribed anyway.
+    static let speechCheckTimeout: Double = 10
+
+    /// A detector that stops answering must not hold the dictation: the engine gets the audio regardless.
+    static func heardSpeech(
+        _ speech: any SpeechDetector, _ samples: [Float], timeout: Double = speechCheckTimeout
+    ) async throws -> Bool {
+        do {
+            return try await Deadline.run(seconds: timeout) { try await speech.containsSpeech(samples) }
+        } catch is DeadlineExceeded {
+            return true
+        }
+    }
+
     public func run(_ samples: [Float], _ kind: JobKind) async throws -> JobOutcome {
         if case .command = kind, llm == nil { throw CommandError.llmNotConfigured }
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else { return .discarded }
-        if let speech, try await !speech.containsSpeech(samples) { return .empty }
+        if let speech, try await !Self.heardSpeech(speech, samples) { return .empty }
         switch kind {
         case let .dictation(bundleID):
             let raw = try await transcribe(samples, dictionary: settings.dictionary)
@@ -78,10 +95,14 @@ public struct TranscriptionJob: Sendable {
 
     private func transcribe(_ samples: [Float], dictionary: [DictionaryEntry]) async throws -> String {
         let transcriber = transcriber, languageCode = settings.languageCode
-        return try await Deadline.run(seconds: transcriptionDeadline(Audio.seconds(samples.count))) {
+        let text = if let transcriptionDeadline {
+            try await Deadline.run(seconds: transcriptionDeadline(Audio.seconds(samples.count))) {
+                try await transcriber.transcribe(samples, languageCode: languageCode, dictionary: dictionary)
+            }
+        } else {
             try await transcriber.transcribe(samples, languageCode: languageCode, dictionary: dictionary)
         }
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func clean(_ raw: String, bundleID: String?) async -> JobOutcome {

@@ -12,16 +12,21 @@ public enum DictionaryReplacer {
             }
             .filter { !$0.0.isEmpty }
             .sorted { $0.0.count > $1.0.count }
-        var result = text
-        for (heard, term) in pairs {
-            let pattern = "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: heard) + "(?![\\p{L}\\p{N}_])"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
-            let range = NSRange(result.startIndex..., in: result)
-            result = regex.stringByReplacingMatches(
-                in: result, range: range, withTemplate: NSRegularExpression.escapedTemplate(for: term)
-            )
+        guard !pairs.isEmpty else { return text }
+        // One pass over the text, longest phrase first: text a rule wrote is never matched again by another.
+        let alternatives = pairs.map { NSRegularExpression.escapedPattern(for: $0.0) }.joined(separator: "|")
+        let pattern = "(?<![\\p{L}\\p{N}_])(?:" + alternatives + ")(?![\\p{L}\\p{N}_])"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
+        var result = ""
+        var last = text.startIndex
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text) else { continue }
+            let found = text[range]
+            let term = pairs.first { $0.0.compare(found, options: .caseInsensitive) == .orderedSame }?.1 ?? String(found)
+            result += text[last..<range.lowerBound] + term
+            last = range.upperBound
         }
-        return result
+        return result + text[last...]
     }
 
     /// Capitals after the first letter, digits or symbols: case a speech model won't guess. Also what

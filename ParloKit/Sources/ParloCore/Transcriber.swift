@@ -35,4 +35,10 @@ public enum RecordingGuard {
     public static func isLongEnough(sampleCount: Int) -> Bool {
         Audio.seconds(sampleCount) >= minimumDuration - 1e-9
     }
+
+    /// Every sample exactly zero: the microphone delivered no signal at all (a MacBook with its lid closed,
+    /// an input muted in hardware). A real microphone in a quiet room still has noise.
+    public static func isDigitalSilence(_ samples: [Float]) -> Bool {
+        !samples.contains { $0 != 0 }
+    }
 }

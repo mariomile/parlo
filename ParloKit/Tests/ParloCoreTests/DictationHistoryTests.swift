@@ -20,8 +20,8 @@ import Testing
 
     @Test func dropsOldestPastLimit() throws {
         let history = DictationHistory(directory: dir, audioLimit: 2)
-        let a = history.add(samples: [0.1], kind: .dictation, date: Date(timeIntervalSince1970: 1)).entry
-        let b = history.add(samples: [0.2], kind: .dictation, date: Date(timeIntervalSince1970: 2)).entry
+        let a = history.add(samples: [0.1], kind: .dictation, status: .failed("x"), date: Date(timeIntervalSince1970: 1)).entry
+        let b = history.add(samples: [0.2], kind: .dictation, status: .failed("x"), date: Date(timeIntervalSince1970: 2)).entry
         let c = history.add(samples: [0.3], kind: .command(selection: nil), date: Date(timeIntervalSince1970: 3)).entry
         #expect(history.entries.map(\.id) == [c.id, b.id])
         #expect(history.samples(a.id) == nil)
@@ -39,6 +39,18 @@ import Testing
         #expect(history.entries.map(\.hasAudio) == [true, false, true])
         #expect(history.samples(done.id) == nil)
         #expect(history.samples(failed.id) == [0.1])
+    }
+
+    @Test func recordingsBeingTranscribedAreNeverPruned() throws {
+        let history = DictationHistory(directory: dir, audioLimit: 1)
+        let a = history.add(samples: [0.1], kind: .dictation, date: Date(timeIntervalSince1970: 1)).entry
+        let b = history.add(samples: [0.2], kind: .dictation, date: Date(timeIntervalSince1970: 2)).entry
+        #expect(history.entries.map(\.id) == [b.id, a.id])
+        #expect(history.samples(a.id) == [0.1])
+        history.update(a.id, status: .done, text: "first")
+        let c = history.add(samples: [0.3], kind: .dictation, date: Date(timeIntervalSince1970: 3)).entry
+        #expect(history.entries.map(\.id) == [c.id, b.id, a.id])
+        #expect(history.entries.map(\.hasAudio) == [true, true, false])
     }
 
     @Test func pruningAudioKeepsTheText() throws {
@@ -67,14 +79,26 @@ import Testing
 
     @Test func fileEntriesHaveNoAudio() throws {
         let history = DictationHistory(directory: dir, audioLimit: 1)
-        let file = history.addFile(name: "memo.m4a", duration: 90)
+        let file = history.addFile(URL(filePath: "/tmp/memo.m4a"), duration: 90)
         history.update(file.id, status: .done, text: "hello")
         history.add(samples: [0.1], kind: .dictation, date: file.date.addingTimeInterval(1))
         let entry = try #require(history.entries.last)
-        #expect(entry.kind == .file(name: "memo.m4a"))
+        #expect(entry.kind == .file(name: "memo.m4a", path: "/tmp/memo.m4a"))
         #expect(entry.hasAudio == false)
         #expect(entry.text == "hello")
         #expect(history.samples(file.id) == nil)
+    }
+
+    @Test func fileCanBeRetriedWhileItIsThere() throws {
+        let history = DictationHistory(directory: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appending(path: "memo.m4a")
+        try Data([1]).write(to: url)
+        let entry = history.addFile(url, duration: 3)
+        #expect(entry.canRetry)
+        try FileManager.default.removeItem(at: url)
+        #expect(!entry.canRetry)
+        #expect(!HistoryEntry(id: "1", date: .now, duration: 1, kind: .file(name: "old.m4a", path: nil), status: .done).canRetry)
     }
 
     @Test func deleteRemovesEntryAndAudio() throws {
@@ -84,6 +108,26 @@ import Testing
         history.delete(a.id)
         #expect(history.entries.map(\.id) == [b.id])
         #expect(!FileManager.default.fileExists(atPath: history.audioURL(a.id).path))
+    }
+
+    @Test func entryStaysWhenItsRecordingCannotBeRemoved() throws {
+        let history = DictationHistory(directory: dir)
+        let a = history.add(samples: [0.1], kind: .dictation).entry
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        history.delete(a.id)
+        #expect(history.entries.map(\.id) == [a.id])
+        #expect(history.saveError != nil)
+    }
+
+    @Test func recordingTheIndexNeverListedComesBack() throws {
+        let history = DictationHistory(directory: dir)
+        let listed = history.add(samples: [0.1], kind: .dictation, status: .done, date: Date(timeIntervalSince1970: 1)).entry
+        try WAV.encode([0.2]).write(to: history.audioURL("2000"))
+        let relaunched = DictationHistory(directory: dir)
+        #expect(relaunched.entries.map(\.id) == ["2000", listed.id])
+        #expect(relaunched.entries.first?.status == .failed("Recovered recording"))
+        #expect(relaunched.samples("2000") == [0.2])
     }
 
     @Test func indexWithoutNewFieldsStillLoads() throws {
@@ -98,7 +142,7 @@ import Testing
         let entries = DictationHistory(directory: dir).entries
         #expect(entries.map(\.id) == ["5", "4", "3", "2"])
         #expect(entries.map(\.hasAudio) == [true, true, false, true])
-        #expect(entries.map(\.kind) == [.dictation, .command(selection: nil), .file(name: "memo.m4a"), .command(selection: "hey")])
+        #expect(entries.map(\.kind) == [.dictation, .command(selection: nil), .file(name: "memo.m4a", path: nil), .command(selection: "hey")])
         #expect(entries[0].text == "vecchio")
         #expect(entries[1].status == .failed("boom"))
     }
@@ -109,9 +153,9 @@ import Testing
         let index = dir.appending(path: "history.json")
         try Data("not json {".utf8).write(to: index)
 
-        // Loading never changes the file.
+        // Loading never changes the file; the recording it lost is listed straight away.
         let relaunched = DictationHistory(directory: dir)
-        #expect(relaunched.entries.isEmpty)
+        #expect(relaunched.entries.map(\.id) == [old.id])
         #expect(try Data(contentsOf: index) == Data("not json {".utf8))
 
         let new = relaunched.add(samples: [0.3], kind: .dictation, date: Date(timeIntervalSince1970: 2)).entry
@@ -119,7 +163,7 @@ import Testing
         #expect(backups.count == 1)
         #expect(try Data(contentsOf: dir.appending(path: backups[0])) == Data("not json {".utf8))
         #expect(relaunched.entries.map(\.id) == [new.id, old.id])
-        #expect(relaunched.entries.last?.status == .failed("Recovered from a damaged history file"))
+        #expect(relaunched.entries.last?.status == .failed("Recovered recording"))
         #expect(relaunched.entries.last?.duration == Audio.seconds(2))
         #expect(relaunched.samples(old.id) == [0.1, 0.2])
         #expect(DictationHistory(directory: dir).entries.map(\.id) == [new.id, old.id])
@@ -169,28 +213,54 @@ import Testing
     @Test func diskFormatKeepsItsFlatKeys() throws {
         let history = DictationHistory(directory: dir)
         history.add(samples: [0.1], kind: .command(selection: "x"), date: Date(timeIntervalSince1970: 1))
-        history.addFile(name: "memo.m4a", duration: 3, date: Date(timeIntervalSince1970: 2))
+        history.addFile(URL(filePath: "/tmp/memo.m4a"), duration: 3, date: Date(timeIntervalSince1970: 2))
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appending(path: "history.json"))) as? [[String: Any]]
         let file = try #require(json?.first)
         let command = try #require(json?.last)
         #expect(file["fileName"] as? String == "memo.m4a")
+        #expect(file["filePath"] as? String == "/tmp/memo.m4a")
         #expect(file["command"] as? Bool == false)
         #expect(command["command"] as? Bool == true)
         #expect(command["selection"] as? String == "x")
         #expect(command["fileName"] == nil)
     }
 
-    @Test func entryIsKeptWhenTheAudioCannotBeWritten() throws {
+    @Test func entryIsKeptWhenTheDiskRefusesWrites() throws {
         let history = DictationHistory(directory: dir)
-        let date = Date(timeIntervalSince1970: 1)
-        let probe = history.add(samples: [0.1], kind: .dictation, date: date).entry
-        history.delete(probe.id)
-        // A folder where the WAV goes makes the write fail.
-        try FileManager.default.createDirectory(at: history.audioURL(probe.id), withIntermediateDirectories: true)
-        let (entry, audioError) = history.add(samples: [0.1], kind: .dictation, date: date)
+        history.add(samples: [0.1], kind: .dictation)
+        // A read-only folder makes both the WAV and the index write fail.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        let (entry, audioError) = history.add(samples: [0.2], kind: .dictation)
         #expect(audioError != nil)
         #expect(!entry.hasAudio)
-        #expect(DictationHistory(directory: dir).entries.map(\.id) == [entry.id])
+        #expect(history.entries.first?.id == entry.id)
+        #expect(history.saveError != nil)
+    }
+
+    @Test func entriesInTheSameMillisecondKeepTheirOwnAudio() throws {
+        let history = DictationHistory(directory: dir)
+        let date = Date(timeIntervalSince1970: 1)
+        let a = history.add(samples: [0.1], kind: .dictation, date: date).entry
+        let b = history.add(samples: [0.2], kind: .dictation, date: date).entry
+        let c = history.addFile(URL(filePath: "/tmp/a.m4a"), duration: 3, date: date)
+        #expect(Set([a.id, b.id, c.id]).count == 3)
+        #expect(history.samples(a.id) == [0.1])
+        #expect(history.samples(b.id) == [0.2])
+    }
+
+    @Test func saveErrorIsReportedAndClears() throws {
+        let history = DictationHistory(directory: dir)
+        let entry = history.add(samples: [0.1], kind: .dictation).entry
+        #expect(history.saveError == nil)
+        let index = dir.appending(path: "history.json")
+        try FileManager.default.removeItem(at: index)
+        try FileManager.default.createDirectory(at: index, withIntermediateDirectories: true)
+        history.update(entry.id, status: .done, text: "ciao")
+        #expect(history.saveError != nil)
+        try FileManager.default.removeItem(at: index)
+        history.update(entry.id, status: .done, text: "ciao!")
+        #expect(history.saveError == nil)
     }
 
     @Test func wavDurationMatchesWhatEncodeWrote() {

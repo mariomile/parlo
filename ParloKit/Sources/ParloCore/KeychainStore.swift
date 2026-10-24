@@ -1,19 +1,21 @@
 import Foundation
 import Security
 
-/// The LLM API key, stored as a generic password in the login keychain.
+/// LLM API keys, stored as generic passwords in the login keychain, one per server (`LLMSettings.keyScope`):
+/// a key saved for one provider is never sent to another.
 public enum KeychainStore {
     static let service = "com.mariomiletta.parlo"
-    static let account = "llm-api-key"
 
-    static var query: [String: Any] {
+    static func account(_ scope: String) -> String { "llm-api-key@\(scope)" }
+
+    static func query(_ scope: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
-         kSecAttrAccount as String: account]
+         kSecAttrAccount as String: account(scope)]
     }
 
-    public static func read() -> String? {
-        var q = query
+    public static func read(for scope: String) -> String? {
+        var q = query(scope)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
@@ -22,13 +24,17 @@ public enum KeychainStore {
         return key.isEmpty ? nil : key
     }
 
-    /// Saves the key; nil or empty deletes it.
+    /// Saves the key; nil or empty deletes it. The old key stays if the new one can't be written.
     @discardableResult
-    public static func save(_ key: String?) -> Bool {
-        SecItemDelete(query as CFDictionary)
-        guard let key, !key.isEmpty else { return true }
-        var q = query
-        q[kSecValueData as String] = Data(key.utf8)
-        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    public static func save(_ key: String?, for scope: String) -> Bool {
+        let query = query(scope)
+        guard let key, !key.isEmpty else {
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        let value = [kSecValueData as String: Data(key.utf8)]
+        let status = SecItemUpdate(query as CFDictionary, value as CFDictionary)
+        guard status == errSecItemNotFound else { return status == errSecSuccess }
+        return SecItemAdd(query.merging(value) { $1 } as CFDictionary, nil) == errSecSuccess
     }
 }

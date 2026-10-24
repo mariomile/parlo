@@ -7,6 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller.launch()
     }
+
+    /// Quit from the menu, Cmd+Q, logout or a system update: the recording in progress is kept for Retry.
+    func applicationWillTerminate(_ notification: Notification) {
+        controller.finishRecording()
+    }
 }
 
 @main

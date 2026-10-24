@@ -61,3 +61,22 @@ public struct ChunkedTranscriber: Transcriber {
         return parts.joined(separator: " ")
     }
 }
+
+/// The gate's transcriber for background work: every call waits its turn behind dictations and has its
+/// own deadline, so a stuck piece is caught in seconds and time spent waiting doesn't count.
+public struct BackgroundTranscriber: Transcriber {
+    let gate: TranscriberGate
+
+    public init(gate: TranscriberGate) {
+        self.gate = gate
+    }
+
+    public func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
+        let seconds = TranscriptionJob.engineDeadline(Audio.seconds(samples.count))
+        return try await gate.runInBackground { transcriber in
+            try await Deadline.run(seconds: seconds) {
+                try await transcriber.transcribe(samples, languageCode: languageCode, dictionary: dictionary)
+            }
+        }
+    }
+}

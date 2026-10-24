@@ -101,6 +101,63 @@ final class SlowTranscriber: Transcriber, @unchecked Sendable {
         #expect(reloads.value == 1)
     }
 
+    @Test func dictationsGoBeforeBackgroundWork() async throws {
+        let g = gate(FakeTranscriber(text: ""))
+        let hold = LockedBox(true)
+        var order: [String] = []
+        let first = Task {
+            try await g.runInBackground { _ in
+                order.append("piece 1")
+                while hold.value { try await Task.sleep(for: .milliseconds(2)) }
+            }
+        }
+        try await waitUntil { order == ["piece 1"] }
+        let second = Task { try await g.runInBackground { _ in order.append("piece 2") } }
+        try await Task.sleep(for: .milliseconds(10))
+        g.enqueue({ _ in order.append("dictation") }, onError: { _ in })
+        #expect(await g.runIfIdle { _ in "preview" } == nil)
+        hold.value = false
+        try await first.value
+        try await second.value
+        try await waitUntil { g.pendingJobs == 0 }
+        #expect(order == ["piece 1", "dictation", "piece 2"])
+        #expect(await g.runIfIdle { _ in "preview" } == "preview")
+    }
+
+    @Test func backgroundDeadlineReloadsAndThrows() async throws {
+        let reloads = LockedBox(0)
+        let g = gate(FakeTranscriber(text: ""), reloads: reloads)
+        await #expect(throws: DeadlineExceeded.self) {
+            try await g.runInBackground { _ in throw DeadlineExceeded(seconds: 1) }
+        }
+        #expect(reloads.value == 1)
+        #expect(try await g.runInBackground { _ in "next" } == "next")
+    }
+
+    @Test func cancelledBackgroundWorkLeavesTheQueue() async throws {
+        let g = gate(FakeTranscriber(text: ""))
+        let hold = LockedBox(true)
+        var ran: [String] = []
+        g.enqueue({ _ in while hold.value { try await Task.sleep(for: .milliseconds(2)) } }, onError: { _ in })
+        let queued = Task { try await g.runInBackground { _ in ran.append("cancelled") } }
+        try await Task.sleep(for: .milliseconds(10))
+        queued.cancel()
+        await #expect(throws: CancellationError.self) { try await queued.value }
+        hold.value = false
+        try await waitUntil { g.pendingJobs == 0 }
+        #expect(try await g.runInBackground { _ in "next" } == "next")
+        #expect(ran.isEmpty)
+    }
+
+    @Test func modelLoadErrorReleasesTheTranscriber() async throws {
+        let g = TranscriberGate(transcriber: { throw FailingError() }, reload: {})
+        await #expect(throws: FailingError.self) { try await g.runInBackground { _ in "never" } }
+        var errors = 0
+        g.enqueue({ _ in }, onError: { _ in errors += 1 })
+        try await waitUntil { g.pendingJobs == 0 }
+        #expect(errors == 1)
+    }
+
     @Test func previewerShowsTextWhileIdle() async throws {
         let g = gate(FakeTranscriber(text: " ciao "))
         let previewer = LivePreviewer(gate: g, interval: 0.01)

@@ -21,6 +21,8 @@ public final class Installable {
     private let install: @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void
     private let uninstall: @Sendable () async throws -> Void
     private var downloading: Task<Void, Never>?
+    /// Bumped by every download and delete, so a check that started before one doesn't overwrite its state.
+    private var generation = 0
 
     /// `install` must throw `CancellationError` (or any error) promptly when the task is cancelled.
     public init(
@@ -37,14 +39,16 @@ public final class Installable {
 
     public func refresh() async {
         guard downloading == nil else { return }
+        let checked = generation
         let installed = await isInstalled()
-        // A download may have started while we were checking.
-        if downloading == nil { state = installed ? .installed : .notInstalled }
+        // A download or delete may have happened while we were checking.
+        if downloading == nil, generation == checked { state = installed ? .installed : .notInstalled }
     }
 
     /// Returns when the download finishes, fails or is cancelled.
     public func download() async {
         if let downloading { return await downloading.value }
+        generation += 1
         state = .downloading(0)
         let install = install, uninstall = uninstall
         let task = Task { [weak self] in
@@ -70,10 +74,20 @@ public final class Installable {
         downloading?.cancel()
     }
 
-    public func delete() async {
+    /// Files that can't be removed leave the state failed, so the user sees it and can download them again.
+    public func delete() async throws {
+        generation += 1
+        // The cancelled download cleans up after itself; removing the files while it still writes them can fail.
+        let download = downloading
         cancel()
-        try? await uninstall()
-        state = .notInstalled
+        await download?.value
+        do {
+            try await uninstall()
+            state = .notInstalled
+        } catch {
+            state = .failed("Couldn't delete the files: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     private func updateProgress(_ fraction: Double) {

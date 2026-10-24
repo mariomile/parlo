@@ -11,13 +11,18 @@ public enum SnippetCodec {
             .sorted { $0.trigger.count > $1.trigger.count }
         for snippet in ordered {
             guard let regex = triggerRegex(snippet.trigger) else { continue }
-            let range = NSRange(result.startIndex..., in: result)
-            guard regex.firstMatch(in: result, range: range) != nil else { continue }
-            let token = "⟦S\(used.count + 1)⟧"
-            used[token] = snippet
-            result = regex.stringByReplacingMatches(
-                in: result, range: range, withTemplate: NSRegularExpression.escapedTemplate(for: token)
-            )
+            // One token per occurrence, so a cleanup that drops one of two is caught.
+            let ns = result as NSString
+            var out = ""
+            var last = 0
+            for match in regex.matches(in: result, range: NSRange(location: 0, length: ns.length)) {
+                out += ns.substring(with: NSRange(location: last, length: match.range.location - last))
+                let token = "⟦S\(used.count + 1)⟧"
+                used[token] = snippet
+                out += token
+                last = NSMaxRange(match.range)
+            }
+            result = out + ns.substring(from: last)
         }
         return (result, used)
     }

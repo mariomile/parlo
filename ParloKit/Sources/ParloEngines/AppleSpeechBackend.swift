@@ -10,7 +10,7 @@ import Speech
 struct AppleSpeechTranscriber: Transcriber {
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         // A bare "it" would match it_CH; pin the usual region.
-        let requested = NemotronBackend.regionalCode(languageCode).map(Locale.init(identifier:)) ?? Locale.current
+        let requested = LanguageCodes.regional(languageCode).map(Locale.init(identifier:)) ?? Locale.current
         guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: requested) else {
             throw TranscriptionError.unsupportedLanguage(requested.identifier)
         }
@@ -54,7 +54,9 @@ actor AssetInstalls {
 
     func start(for transcriber: DictationTranscriber, locale: Locale) async {
         guard started.insert(locale.identifier).inserted else { return }
-        guard let request = try? await AssetInventory.assetInstallationRequest(supporting: [transcriber]) else { return }
+        guard let request = try? await AssetInventory.assetInstallationRequest(supporting: [transcriber]) else {
+            return finished(locale.identifier)
+        }
         Task.detached {
             do { try await request.downloadAndInstall() } catch {}
             await self.finished(locale.identifier)

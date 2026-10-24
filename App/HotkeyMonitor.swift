@@ -42,18 +42,21 @@ final class HotkeyMonitor {
     }
 
     /// `fromHardware` is false for synthetic events, like our own Cmd+C in command mode.
-    fileprivate func handle(type: CGEventType, flags: CGEventFlags, time: Double, fromHardware: Bool, escape: Bool) {
+    /// `keycode` is the event's key: Escape for a key press, Fn (63) or another modifier for a flags change.
+    fileprivate func handle(type: CGEventType, flags: CGEventFlags, time: Double, fromHardware: Bool, keycode: Int64) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
         if type == .keyDown {
             guard fromHardware else { return }
-            if let action = machine.keyPressed(at: time, escape: escape) { onAction(action) }
+            if let action = machine.keyPressed(at: time, escape: keycode == 53) { onAction(action) } // kVK_Escape
             return
         }
         guard type == .flagsChanged else { return }
-        if let action = machine.handle(fn: flags.contains(.maskSecondaryFn), ctrl: flags.contains(.maskControl), at: time) {
+        if let action = machine.handle(
+            fn: flags.contains(.maskSecondaryFn), ctrl: flags.contains(.maskControl), at: time, fnKey: keycode == 63 // kVK_Function
+        ) {
             onAction(action)
         }
     }
@@ -67,12 +70,12 @@ private nonisolated func hotkeyTapCallback(
         let time = Double(event.timestamp) / 1_000_000_000
         let fromHardware = event.getIntegerValueField(.eventSourceStateID)
             == Int64(CGEventSourceStateID.hidSystemState.rawValue)
-        let escape = type == .keyDown && event.getIntegerValueField(.keyboardEventKeycode) == 53 // kVK_Escape
+        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
         let address = UInt(bitPattern: userInfo)
         // The tap's run loop source is on the main run loop.
         MainActor.assumeIsolated {
             let pointer = UnsafeMutableRawPointer(bitPattern: address)!
-            Unmanaged<HotkeyMonitor>.fromOpaque(pointer).takeUnretainedValue().handle(type: type, flags: flags, time: time, fromHardware: fromHardware, escape: escape)
+            Unmanaged<HotkeyMonitor>.fromOpaque(pointer).takeUnretainedValue().handle(type: type, flags: flags, time: time, fromHardware: fromHardware, keycode: keycode)
         }
     }
     return Unmanaged.passUnretained(event)

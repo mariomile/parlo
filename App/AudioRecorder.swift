@@ -58,6 +58,10 @@ final class AudioRecorder {
     private var configObserver: NSObjectProtocol?
     private let sink = SampleSink()
     private var isRecording = false
+    /// Bumped by every start and stop, so a restart scheduled for an earlier recording does nothing.
+    private var generation = 0
+    /// The chosen microphone couldn't be used at some point of this recording, so the system default was.
+    private(set) var usedFallback = false
 
     /// RMS of the latest buffer, 0...~1.
     var level: Float { sink.level }
@@ -70,7 +74,9 @@ final class AudioRecorder {
 
     func start(deviceUID: String?) throws {
         _ = stop()
+        generation += 1
         sink.reset()
+        usedFallback = false
         self.deviceUID = deviceUID
         try startEngine()
         isRecording = true
@@ -79,6 +85,7 @@ final class AudioRecorder {
     /// Stops capture and returns everything recorded since `start`, even if the engine already died.
     func stop() -> [Float] {
         isRecording = false
+        generation += 1
         if let engine { teardown(engine) }
         return sink.drain()
     }
@@ -87,10 +94,15 @@ final class AudioRecorder {
     private func startEngine() throws {
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        if let deviceUID, let deviceID = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
-            var id = deviceID
-            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                 &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        // A chosen microphone that is unplugged, or refuses to be selected, leaves the system default in place:
+        // dictating with another mic beats not dictating.
+        if let deviceUID {
+            var selected = false
+            if var id = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
+                selected = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                                &id, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr
+            }
+            if !selected { usedFallback = true }
         }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw RecorderError.noMicrophone }
@@ -119,8 +131,12 @@ final class AudioRecorder {
             try startEngine()
         } catch {
             guard attempt < 5 else { return onFailure(error.localizedDescription) }
+            let scheduled = generation
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                MainActor.assumeIsolated { self?.restart(attempt: attempt + 1) }
+                MainActor.assumeIsolated {
+                    guard let self, self.generation == scheduled else { return }
+                    self.restart(attempt: attempt + 1)
+                }
             }
         }
     }

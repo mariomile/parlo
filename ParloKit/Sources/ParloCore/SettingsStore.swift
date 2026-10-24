@@ -14,15 +14,19 @@ public struct SettingsStore: Sendable {
 
     var fileURL: URL { directory.appendingPathComponent("settings.json") }
 
-    public func load() -> AppSettings {
-        guard let data = try? Data(contentsOf: fileURL) else { return .default }
+    /// The saved settings. When the file is not JSON at all it is moved to `quarantined` and the defaults
+    /// come back, so the app can tell the user instead of silently starting over.
+    public func load() -> (settings: AppSettings, quarantined: URL?) {
+        guard let data = try? Data(contentsOf: fileURL) else { return (.default, nil) }
         do {
-            return try JSONDecoder().decode(AppSettings.self, from: data)
+            return (try JSONDecoder().decode(AppSettings.self, from: data), nil)
         } catch {
             let ts = Int(Date().timeIntervalSince1970)
             let aside = directory.appendingPathComponent("settings.corrupt-\(ts).json")
-            try? FileManager.default.moveItem(at: fileURL, to: aside)
-            return .default
+            // The bytes already read are kept even when the file can't be moved.
+            let kept = (try? FileManager.default.moveItem(at: fileURL, to: aside)) != nil
+                || (try? data.write(to: aside, options: .atomic)) != nil
+            return (.default, kept ? aside : nil)
         }
     }
 

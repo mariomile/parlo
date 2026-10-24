@@ -7,6 +7,13 @@ import Testing
         #expect(!RecordingGuard.isLongEnough(sampleCount: 4_799))
         #expect(RecordingGuard.isLongEnough(sampleCount: 4_800))
     }
+
+    @Test func digitalSilence() {
+        #expect(RecordingGuard.isDigitalSilence([Float](repeating: 0, count: 16_000)))
+        var quietRoom = [Float](repeating: 0, count: 16_000)
+        quietRoom[8_000] = 0.0001
+        #expect(!RecordingGuard.isDigitalSilence(quietRoom))
+    }
 }
 
 @Suite struct DictationJobTests {
@@ -44,6 +51,10 @@ import Testing
             speech: FakeSpeechDetector(speech: false)
         )
         #expect(try await p.run(oneSecond, .dictation(bundleID: nil)) == .empty)
+    }
+
+    @Test func stalledSpeechCheckStillTranscribes() async throws {
+        #expect(try await TranscriptionJob.heardSpeech(StalledSpeechDetector(), oneSecond, timeout: 0.05))
     }
 
     @Test func speechIsTranscribed() async throws {

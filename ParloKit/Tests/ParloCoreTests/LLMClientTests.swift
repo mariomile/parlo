@@ -6,6 +6,9 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, Data))?
     nonisolated(unsafe) static var lastRequest: URLRequest?
     nonisolated(unsafe) static var lastBody: Data?
+    /// Answers the headers, then a byte every 50 ms and never the end, like a server that trickles a reply.
+    nonisolated(unsafe) static var stall = false
+    private var trickle: DispatchSourceTimer?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -28,10 +31,21 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let (status, data) = Self.handler!(request)
         let resp = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        if Self.stall {
+            let timer = DispatchSource.makeTimerSource()
+            timer.schedule(deadline: .now(), repeating: .milliseconds(50))
+            timer.setEventHandler { [weak self] in
+                guard let self else { return }
+                client?.urlProtocol(self, didLoad: Data(" ".utf8))
+            }
+            timer.resume()
+            trickle = timer
+            return
+        }
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() {}
+    override func stopLoading() { trickle?.cancel() }
 }
 
 @Suite(.serialized) struct LLMClientTests {
@@ -56,6 +70,14 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(body["temperature"] as? Double == 0)
         let msgs = body["messages"] as! [[String: String]]
         #expect(msgs == [["role": "system", "content": "S"], ["role": "user", "content": "U"]])
+    }
+
+    @Test func stalledResponseTimesOutAsANetworkError() async throws {
+        StubProtocol.stall = true
+        defer { StubProtocol.stall = false }
+        StubProtocol.handler = { _ in (200, Data()) }
+        let client = LLMClient(settings: settings, apiKey: nil, session: session())
+        await #expect(throws: URLError(.timedOut)) { try await client.complete(system: "S", user: "U", timeout: 0.2) }
     }
 
     @Test func noKeyNoAuthHeader() async throws {

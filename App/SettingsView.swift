@@ -193,11 +193,15 @@ private struct ModelsTab: View {
 
     private func delete(_ item: StoredFiles) {
         Task {
-            if case let .model(id) = item.kind { await models.delete(id) }
-            if case .cleanupModel = item.kind { await cleanupModel.delete() }
+            // A failure shows on the model's own row; the files are then removed below regardless.
+            if case let .model(id) = item.kind { try? await models.delete(id) }
+            if case .cleanupModel = item.kind { try? await cleanupModel.delete() }
             do {
                 try ModelStorage.delete(item)
                 deleteError = nil
+                // With the files gone this succeeds, so a model whose own delete failed above is cleared too.
+                if case let .model(id) = item.kind { try? await models.delete(id) }
+                if case .cleanupModel = item.kind { try? await cleanupModel.delete() }
             } catch {
                 deleteError = "Couldn't delete \(item.name): \(error.localizedDescription)"
             }
@@ -328,7 +332,7 @@ struct ModelActions: View {
             case .installed:
                 if models.activeModelID != id { Button("Use") { models.select(id) } }
                 if needsDownload {
-                    Button(role: .destructive) { Task { await models.delete(id) } } label: {
+                    Button(role: .destructive) { Task { try? await models.delete(id) } } label: {
                         Image(systemName: "trash")
                     }
                     .help("Delete model files")
@@ -393,7 +397,7 @@ private struct AITab: View {
                     LabeledContent("API key") {
                         HStack {
                             SecureField("Not set", text: $key).frame(maxWidth: 260)
-                            Button("Save") { controller.apiKey = key.isEmpty ? nil : key }
+                            Button("Save") { controller.setAPIKey(key.isEmpty ? nil : key) }
                                 .disabled(key == (controller.apiKey ?? ""))
                         }
                     }
@@ -409,6 +413,8 @@ private struct AITab: View {
         }
         .formStyle(.grouped)
         .onAppear { key = controller.apiKey ?? "" }
+        // Each server has its own key: a new base URL shows the one saved for it.
+        .onChange(of: controller.apiKey) { key = $1 ?? "" }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             appleStatus = AppleIntelligenceClient.unavailableReason
         }
@@ -450,7 +456,7 @@ private struct AITab: View {
                     Button("Retry") { Task { await files.download() } }
                 case .installed:
                     Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    Button(role: .destructive) { Task { await files.delete() } } label: {
+                    Button(role: .destructive) { Task { try? await files.delete() } } label: {
                         Image(systemName: "trash")
                     }
                     .help("Delete model files")
@@ -600,7 +606,7 @@ private struct DictionaryTab: View {
                 ForEach($controller.settings.dictionary) { $entry in
                     HStack {
                         TextField("Term", text: $entry.term).frame(maxWidth: 180)
-                        HeardAsField(heardAs: $entry.heardAs)
+                        HeardAsField(controller: controller, entryID: entry.id, initial: entry.heardAs)
                         RemoveButton(help: "Remove") {
                             controller.settings.dictionary.removeAll { $0.id == entry.id }
                         }
@@ -634,15 +640,18 @@ private struct DictionaryTab: View {
 }
 
 /// Edits the variants as free text; splits into the list when editing ends, so commas and spaces survive typing.
+/// Commits by entry id: the field can end editing after its row was removed or the list reordered.
 private struct HeardAsField: View {
-    @Binding var heardAs: [String]
+    let controller: AppController
+    let entryID: UUID
+    let initial: [String]
     @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
         TextField("Often heard as (comma-separated)", text: $text)
             .focused($focused)
-            .onAppear { text = heardAs.joined(separator: ", ") }
+            .onAppear { text = initial.joined(separator: ", ") }
             .onSubmit(commit)
             .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
             .onDisappear(perform: commit)
@@ -650,7 +659,9 @@ private struct HeardAsField: View {
 
     private func commit() {
         let parsed = DictionaryTab.split(text)
-        if parsed != heardAs { heardAs = parsed }
+        guard let i = controller.settings.dictionary.firstIndex(where: { $0.id == entryID }),
+              controller.settings.dictionary[i].heardAs != parsed else { return }
+        controller.settings.dictionary[i].heardAs = parsed
     }
 }
 

@@ -66,7 +66,15 @@ public struct LLMClient: ChatCompleting {
             temperature: 0
         ))
 
-        let (data, response) = try await session.data(for: request)
+        // The request's own timeout only counts silence: a server that trickles bytes would never hit it.
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await Deadline.run(seconds: timeout) { [session, request] in
+                try await session.data(for: request)
+            }
+        } catch is DeadlineExceeded {
+            throw URLError(.timedOut)
+        }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
             throw LLMError.http(status, String(decoding: data, as: UTF8.self))

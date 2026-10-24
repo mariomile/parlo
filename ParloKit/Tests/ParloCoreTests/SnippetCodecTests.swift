@@ -31,9 +31,10 @@ import Testing
         #expect(!SnippetCodec.allTokensPresent("nothing here", used: used))
     }
 
-    @Test func repeatedTriggerReusesToken() {
-        let (encoded, used) = SnippetCodec.encode("firma e firma", snippets: snippets)
-        #expect(encoded == "⟦S1⟧ e ⟦S1⟧")
-        #expect(used.count == 1)
+    @Test func eachOccurrenceGetsItsOwnToken() {
+        let (encoded, used) = SnippetCodec.encode("firma e firma, my address", snippets: snippets)
+        #expect(encoded == "⟦S2⟧ e ⟦S3⟧, ⟦S1⟧")
+        #expect(SnippetCodec.decode(encoded, used: used) == "Mario\nmario@example.com e Mario\nmario@example.com, Via Roma 1, Milano")
+        #expect(!SnippetCodec.allTokensPresent("⟦S2⟧ e ⟦S1⟧", used: used))
     }
 }

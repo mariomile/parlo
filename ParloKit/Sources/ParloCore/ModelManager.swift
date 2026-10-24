@@ -48,9 +48,10 @@ public final class ModelManager {
         files[id]!.cancel()
     }
 
-    public func delete(_ id: ModelID) async {
+    /// The active model is switched away from only once its files are gone.
+    public func delete(_ id: ModelID) async throws {
         guard ModelCatalog.info(id).needsDownload else { return }
-        await files[id]!.delete()
+        try await files[id]!.delete()
         if activeModelID == id { setActive(.appleSpeech) }
     }
 

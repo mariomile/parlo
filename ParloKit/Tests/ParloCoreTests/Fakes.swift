@@ -25,6 +25,13 @@ struct FakeSpeechDetector: SpeechDetector {
     func containsSpeech(_ samples: [Float]) async throws -> Bool { speech }
 }
 
+/// Never answers, like a detector stuck in its model.
+struct StalledSpeechDetector: SpeechDetector {
+    func containsSpeech(_ samples: [Float]) async throws -> Bool {
+        while true { try? await Task.sleep(for: .seconds(1)) }
+    }
+}
+
 final class RecordingTranscriber: Transcriber, @unchecked Sendable {
     let text: String
     let dictionaries = LockedBox<[[DictionaryEntry]]>([])

@@ -41,6 +41,8 @@ actor ParakeetTranscriber: Transcriber {
     let manager: AsrManager
     private var ctcModels: CtcModels?
     private var loadingCtc = false
+    /// After a failed download, wait before trying again rather than retrying on every dictation.
+    private var ctcRetryAfter = Date.distantPast
     private var session: (key: [String], boosting: VocabularyBoostingSession)?
 
     init(manager: AsrManager) {
@@ -83,7 +85,7 @@ actor ParakeetTranscriber: Transcriber {
     /// The CTC model (~100 MB) downloads and loads in the background: dictations made before it is
     /// ready skip boosting instead of waiting for it.
     private func startLoadingCtcModels() {
-        guard ctcModels == nil, !loadingCtc else { return }
+        guard ctcModels == nil, !loadingCtc, Date() >= ctcRetryAfter else { return }
         loadingCtc = true
         Task { ctcLoaded(try? await CtcModels.downloadAndLoad(variant: .ctc110m)) }
     }
@@ -91,5 +93,6 @@ actor ParakeetTranscriber: Transcriber {
     private func ctcLoaded(_ models: CtcModels?) {
         ctcModels = models
         loadingCtc = false
+        if models == nil { ctcRetryAfter = Date().addingTimeInterval(300) }
     }
 }

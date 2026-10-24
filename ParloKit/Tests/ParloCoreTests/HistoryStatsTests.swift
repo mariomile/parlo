@@ -14,7 +14,7 @@ import Testing
             entry("one two three", seconds: 2),
             entry("four  five\nsix seven", seconds: 3),
             entry("rewritten text", seconds: 1, kind: .command(selection: nil)),
-            entry("a whole transcript here", seconds: 600, kind: .file(name: "memo.m4a")),
+            entry("a whole transcript here", seconds: 600, kind: .file(name: "memo.m4a", path: nil)),
             entry(nil, seconds: 5, status: .nothingHeard),
             entry(nil, seconds: 5, status: .failed("x")),
         ])
@@ -40,7 +40,7 @@ import Testing
             entry("ciao a tutti", seconds: 2),
             entry(nil, seconds: 1, status: .nothingHeard),
             entry(nil, seconds: 1, status: .failed("no model")),
-            entry("from a file", seconds: 61, kind: .file(name: "memo.m4a")),
+            entry("from a file", seconds: 61, kind: .file(name: "memo.m4a", path: nil)),
         ])
         #expect(md.hasPrefix("# Parlo history"))
         #expect(md.contains("ciao a tutti"))
