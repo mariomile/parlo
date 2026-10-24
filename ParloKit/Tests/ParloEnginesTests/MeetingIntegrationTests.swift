@@ -4,10 +4,17 @@ import Testing
 @testable import ParloEngines
 
 /// A two-person call made with `say`: each side on its own track, cut by Silero, transcribed by Parakeet,
-/// merged into turns and, when Apple Intelligence is ready, turned into notes.
+/// merged into turns and turned into notes by Apple Intelligence and the local model, when they are ready.
 /// Run with `PARLO_INTEGRATION=1 swift test --filter MeetingIntegrationTests`.
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["PARLO_INTEGRATION"] == "1"))
 struct MeetingIntegrationTests {
+    private final class TestBundleToken {}
+
+    /// Registers the test bundle so MLX finds its Metal library (see EngineIntegrationTests).
+    init() {
+        _ = Bundle(for: TestBundleToken.self)
+    }
+
     @Test func twoSidedCallBecomesOrderedTurns() async throws {
         let installer = try await EngineIntegrationTests.installer(with: .parakeetV3)
         let tracks = try await MeetingTrackTranscriber(
@@ -37,13 +44,24 @@ struct MeetingIntegrationTests {
         #expect(turns[2].text.localizedCaseInsensitiveContains("venue"))
         #expect(turns[0].end <= turns[1].start && turns[1].end <= turns[2].start)
 
+        let lines = MeetingTranscript.lines(turns)
+        let duration = Audio.seconds(me.count)
         if let reason = AppleIntelligenceClient.unavailableReason {
-            print("[meeting] notes skipped: \(reason)")
-            return
+            print("[meeting] Apple Intelligence notes skipped: \(reason)")
+        } else {
+            try await expectNotes(MeetingNotes(llm: AppleIntelligenceClient(), maxCharacters: 4000).write(lines, duration: duration))
         }
-        let notes = try await MeetingNotes(llm: AppleIntelligenceClient(), maxCharacters: 4000)
-            .write(MeetingTranscript.lines(turns), duration: Audio.seconds(me.count))
+        let local = await LocalLLM()
+        guard await HubSnapshot.isInstalled(local.directory) else { return print("[meeting] local notes skipped: model not downloaded") }
+        let notes = try await local.keepLoaded {
+            try await MeetingNotes(llm: local.client, maxCharacters: 12000).write(lines, duration: duration)
+        }
+        expectNotes(notes)
+    }
+
+    private func expectNotes(_ notes: MeetingNotes.Result) {
         print("[meeting] title: \(notes.title ?? "-")\n\(notes.notes)")
+        #expect(notes.title != nil)
         #expect(notes.notes.localizedCaseInsensitiveContains("budget"))
     }
 }
