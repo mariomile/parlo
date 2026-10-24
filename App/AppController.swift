@@ -37,6 +37,7 @@ final class AppController {
     private let hud = HUDController()
     private let recorder = AudioRecorder()
     private let hotkey = HotkeyMonitor()
+    private let preview = LivePreviewer()
     private struct Recording {
         let command: Bool
         let bundleID: String?
@@ -45,7 +46,12 @@ final class AppController {
         /// Set once the system reports fn held, so the stuck-key check can trust it.
         var sawFnHeld = false
         var fnUpTicks = 0
+        /// Hands-free after a double tap: fn is up while recording.
+        var locked = false
     }
+
+    /// A forgotten hands-free recording stops here and is transcribed like any other.
+    private static let handsFreeLimit: TimeInterval = 10 * 60
 
     private var recording: Recording?
     /// The short wait after fn is released, before the microphone stops.
@@ -187,6 +193,7 @@ final class AppController {
         case .startCommand: begin(command: true)
         case .stop: end()
         case .cancel: cancel()
+        case let .lock(command): lock(command: command)
         }
     }
 
@@ -213,24 +220,62 @@ final class AppController {
         )
         updatePhase()
         hud.show(.recording(command: command))
+        startPreview()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.hud.model.pushLevel(self.recorder.level)
                 self.checkFnStillHeld()
+                self.checkHandsFreeLimit()
             }
         }
+    }
+
+    /// Double tap: the recording the first tap started keeps going hands-free, or a new one starts if it already stopped.
+    private func lock(command: Bool) {
+        if stopping != nil, recording?.command == command {
+            stopping?.cancel()
+            stopping = nil
+        } else {
+            begin(command: command)
+        }
+        // Couldn't start (a blocker, or the microphone): don't leave the hotkey waiting to stop a hands-free recording.
+        guard recording != nil else { return hotkey.reset() }
+        recording?.locked = true
+        hud.model.handsFree = true
+    }
+
+    /// Shows the words recognized so far in the HUD. Display only: the pasted text comes from `process`.
+    private func startPreview() {
+        guard LivePreview.supports(models.activeInfo) else { return }
+        preview.start(
+            transcriber: { [weak self] in try? await self?.models.transcriber() },
+            languageCode: settings.languageCode,
+            samples: { [weak self] in self?.recorder.recentSamples($0) ?? [] },
+            isBusy: { [weak self] in (self?.pendingJobs ?? 0) > 0 },
+            show: { [weak self] text in
+                guard let self, recording != nil else { return }
+                hud.model.liveText = text
+            }
+        )
     }
 
     /// The event tap can miss fn's release (it is switched off while the system is busy). If the keyboard
     /// says fn has been up for a while, stop as if it had been released.
     private func checkFnStillHeld() {
-        guard var rec = recording, stopping == nil else { return }
+        guard var rec = recording, !rec.locked, stopping == nil else { return }
         let held = CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn)
         if held { rec.sawFnHeld = true }
         rec.fnUpTicks = held ? 0 : rec.fnUpTicks + 1
         recording = rec
         guard rec.sawFnHeld, rec.fnUpTicks >= 15 else { return }
+        hotkey.reset()
+        end()
+    }
+
+    private func checkHandsFreeLimit() {
+        guard let rec = recording, rec.locked, stopping == nil,
+              Date.now.timeIntervalSince(rec.startedAt) >= Self.handsFreeLimit else { return }
         hotkey.reset()
         end()
     }
@@ -270,6 +315,7 @@ final class AppController {
         stopping?.cancel()
         stopping = nil
         guard let rec = recording else { return nil }
+        preview.stop()
         levelTimer?.invalidate()
         levelTimer = nil
         let samples = recorder.stop()
@@ -309,6 +355,7 @@ final class AppController {
         let previous = queue
         queue = Task {
             await previous?.value
+            await preview.idle()
             await job()
             pendingJobs -= 1
             updatePhase()
@@ -457,9 +504,10 @@ final class AppController {
         if let state { hud.show(state) } else { hud.hide() }
     }
 
-    /// fn was combined with another key right away (fn+Delete, fn+arrow): drop the recording.
+    /// fn was combined with another key right away (fn+Delete, fn+arrow), or Esc while hands-free: drop the recording.
     private func cancel() {
         guard recording != nil, stopping == nil else { return }
+        preview.stop()
         levelTimer?.invalidate()
         levelTimer = nil
         _ = recorder.stop()
@@ -471,6 +519,7 @@ final class AppController {
     /// The microphone stopped mid-recording and could not restart: keep what was captured.
     private func microphoneFailed(_ reason: String) {
         guard recording != nil else { return }
+        if recording?.locked == true { hotkey.reset() }
         finishRecording()
         hud.show(.message("Microphone stopped: \(reason)", isError: true))
     }

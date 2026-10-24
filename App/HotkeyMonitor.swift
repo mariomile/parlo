@@ -35,14 +35,14 @@ final class HotkeyMonitor {
     }
 
     /// `fromHardware` is false for synthetic events, like our own Cmd+C in command mode.
-    fileprivate func handle(type: CGEventType, flags: CGEventFlags, time: Double, fromHardware: Bool) {
+    fileprivate func handle(type: CGEventType, flags: CGEventFlags, time: Double, fromHardware: Bool, escape: Bool) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
         if type == .keyDown {
             guard fromHardware else { return }
-            if let action = machine.keyPressed(at: time) { onAction(action) }
+            if let action = machine.keyPressed(at: time, escape: escape) { onAction(action) }
             return
         }
         guard type == .flagsChanged else { return }
@@ -60,11 +60,12 @@ private nonisolated func hotkeyTapCallback(
         let time = Double(event.timestamp) / 1_000_000_000
         let fromHardware = event.getIntegerValueField(.eventSourceStateID)
             == Int64(CGEventSourceStateID.hidSystemState.rawValue)
+        let escape = type == .keyDown && event.getIntegerValueField(.keyboardEventKeycode) == 53 // kVK_Escape
         let address = UInt(bitPattern: userInfo)
         // The tap's run loop source is on the main run loop.
         MainActor.assumeIsolated {
             let pointer = UnsafeMutableRawPointer(bitPattern: address)!
-            Unmanaged<HotkeyMonitor>.fromOpaque(pointer).takeUnretainedValue().handle(type: type, flags: flags, time: time, fromHardware: fromHardware)
+            Unmanaged<HotkeyMonitor>.fromOpaque(pointer).takeUnretainedValue().handle(type: type, flags: flags, time: time, fromHardware: fromHardware, escape: escape)
         }
     }
     return Unmanaged.passUnretained(event)
