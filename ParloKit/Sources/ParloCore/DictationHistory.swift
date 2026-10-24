@@ -122,7 +122,10 @@ public final class DictationHistory {
         self.directory = directory
         self.audioLimit = audioLimit
         self.textLimit = textLimit
-        (entries, damaged) = Self.readIndex(directory.appending(path: "history.json"))
+        let (read, damaged) = Self.readIndex(directory.appending(path: "history.json"))
+        // Audio the index never got to list, because its save failed before a quit, comes back as a failure to retry.
+        entries = (read + Self.orphanedRecordings(in: directory, known: Set(read.map(\.id)))).sorted { $0.date > $1.date }
+        self.damaged = damaged
     }
 
     public static var appSupportDirectory: URL {
@@ -178,8 +181,15 @@ public final class DictationHistory {
         mutate(id) { if $0.isCommand { $0.kind = .command(selection: selection) } }
     }
 
+    /// A recording that can't be removed keeps its entry, so it is never left on disk unlisted.
     public func delete(_ id: String) {
-        try? FileManager.default.removeItem(at: audioURL(id))
+        do {
+            try FileManager.default.removeItem(at: audioURL(id))
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+        } catch {
+            saveError = error.localizedDescription
+            return
+        }
         write { $0.removeAll { $0.id == id } }
     }
 
@@ -208,8 +218,10 @@ public final class DictationHistory {
         write(adding: entry.id) { all in
             all.insert(entry, at: 0)
             while all.filter(\.hasAudio).count > audioLimit {
-                // Recordings that never produced text are the ones worth keeping longest.
-                let i = all.lastIndex { $0.hasAudio && $0.status == .done } ?? all.lastIndex { $0.hasAudio }!
+                // Recordings that never produced text are the ones worth keeping longest; one still
+                // being transcribed is never touched.
+                guard let i = all.lastIndex(where: { $0.hasAudio && $0.status == .done })
+                    ?? all.lastIndex(where: { $0.hasAudio && $0.status != .processing }) else { break }
                 try? FileManager.default.removeItem(at: audioURL(all[i].id))
                 all[i].hasAudio = false
                 if all[i].text == nil { all.remove(at: i) }
@@ -258,10 +270,10 @@ public final class DictationHistory {
         let backup = directory.appending(path: "history.damaged-\(Self.id(for: .now)).json")
         try? FileManager.default.copyItem(at: indexURL, to: backup)
         let known = Set(entries.map(\.id) + [newID].compactMap { $0 })
-        return (entries + orphanedRecordings(known: known)).sorted { $0.date > $1.date }
+        return (entries + Self.orphanedRecordings(in: directory, known: known)).sorted { $0.date > $1.date }
     }
 
-    private func orphanedRecordings(known: Set<String>) -> [HistoryEntry] {
+    private static func orphanedRecordings(in directory: URL, known: Set<String>) -> [HistoryEntry] {
         let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
         return files.compactMap { url in
             let id = url.deletingPathExtension().lastPathComponent
@@ -269,7 +281,7 @@ public final class DictationHistory {
             let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             return HistoryEntry(
                 id: id, date: Date(timeIntervalSince1970: Double(ms) / 1000), duration: WAV.duration(byteCount: bytes),
-                kind: .dictation, status: .failed("Recovered from a damaged history file")
+                kind: .dictation, status: .failed("Recovered recording")
             )
         }
     }

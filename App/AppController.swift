@@ -11,18 +11,15 @@ final class AppController {
     var settings: AppSettings {
         didSet {
             guard settings != oldValue else { return }
+            if settings.llm.keyScope != oldValue.llm.keyScope { apiKey = Self.readKey(settings.llm) }
             do { try store.save(settings) } catch {
                 hud.show(.message("Couldn't save settings: \(error.localizedDescription)", isError: true))
             }
             localLLM.inUse = settings.llm.usesLocalModel
         }
     }
-    /// Cached so the keychain is read once per launch.
-    var apiKey: String? {
-        didSet {
-            if !KeychainStore.save(apiKey) { hud.show(.message("Couldn't save the API key to the Keychain", isError: true)) }
-        }
-    }
+    /// The key saved for the current base URL's server. Cached so the keychain is read once per server.
+    private(set) var apiKey: String?
     private(set) var phase: Phase = .idle
     private(set) var hotkeyActive = false
     /// Words the user fixed right after a paste, offered for the dictionary.
@@ -57,13 +54,28 @@ final class AppController {
 
     private static let copiedHint = "Copied: press ⌘V to paste"
 
+    private static func readKey(_ llm: LLMSettings) -> String? {
+        llm.keyScope.flatMap(KeychainStore.read(for:))
+    }
+
+    /// Saves the key for the current base URL's server; nil removes it.
+    func setAPIKey(_ key: String?) {
+        guard let scope = settings.llm.keyScope else {
+            return hud.show(.message("Enter a valid base URL before saving the API key", isError: true))
+        }
+        guard KeychainStore.save(key, for: scope) else {
+            return hud.show(.message("Couldn't save the API key to the Keychain", isError: true))
+        }
+        apiKey = key
+    }
+
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
         self.store = store
         let (loaded, quarantined) = store.load()
         settings = loaded
         settingsWereReset = quarantined != nil
-        apiKey = KeychainStore.read()
+        apiKey = Self.readKey(loaded.llm)
         var onActiveChange: (ModelID) -> Void = { _ in }
         let models = ModelManager(installer: EngineInstaller(), activeModelID: loaded.activeModelID) { onActiveChange($0) }
         self.models = models
@@ -186,6 +198,11 @@ final class AppController {
             for _ in 0..<25 where NSWorkspace.shared.frontmostApplication != app {
                 try? await Task.sleep(for: .milliseconds(40))
             }
+            // The app didn't come forward: pasting now would land in whatever did.
+            guard NSWorkspace.shared.frontmostApplication == app else {
+                copy(text)
+                return show(.message(Self.copiedHint, isError: false))
+            }
             await deliver(text, warning: nil)
         }
     }
@@ -250,7 +267,7 @@ final class AppController {
     }
 
     /// Stops the microphone now, saves the audio to history, then queues it for transcription.
-    private func finishRecording() {
+    func finishRecording() {
         if let finished = session.stop() { save(finished) }
     }
 
@@ -270,6 +287,7 @@ final class AppController {
         }
         let (entry, audioError) = history.add(samples: samples, kind: rec.command ? .command(selection: nil) : .dictation)
         show(audioError.map { .message("Couldn't save the recording (\($0.localizedDescription)). Transcribing anyway.", isError: true) }
+            ?? (finished.usedFallback ? .message("Your chosen microphone wasn't available, so the default one was used.", isError: false) : nil)
             ?? .processing(command: rec.command))
         // Kept for Retry even if this job fails before it runs, or Parlo quits while it's queued.
         if let selection = rec.selection {
@@ -397,11 +415,16 @@ final class AppController {
     private func cancel(keepingAudio: Bool) {
         guard !session.isStopping, let finished = session.stop() else { return }
         guard keepingAudio, RecordingGuard.isLongEnough(sampleCount: finished.samples.count) else { return hud.hide() }
-        let kind: HistoryEntry.Kind = finished.recording.command ? .command(selection: nil) : .dictation
+        let rec = finished.recording
+        let kind: HistoryEntry.Kind = rec.command ? .command(selection: nil) : .dictation
         let (entry, audioError) = history.add(samples: finished.samples, kind: kind, status: .failed("Cancelled"))
         if let audioError {
             history.delete(entry.id)
             return hud.show(.message("Cancelled. Couldn't keep the audio: \(audioError.localizedDescription)", isError: true))
+        }
+        // Retry applies the command to the same text.
+        if let selection = rec.selection {
+            Task { if let text = await selection.value { history.setSelection(entry.id, text) } }
         }
         hud.show(.message("Cancelled. The audio is kept in Recent if you need it.", isError: false))
     }
@@ -426,7 +449,11 @@ final class AppController {
             show(.message("No text field to paste into. \(Self.copiedHint)", isError: false))
             return
         }
-        await TextInserter.insert(text)
+        switch await TextInserter.insert(text) {
+        case .pasted: break
+        case .leftOnClipboard: return show(.message("The app didn't take the text. \(Self.copiedHint)", isError: false))
+        case .lost: return show(.message("The app didn't take the text. It's in Recent, in the menu bar.", isError: true))
+        }
         show(warning.map { .message($0, isError: true) } ?? .done)
         if let field = target.field { watchForCorrection(of: text, in: field) }
     }
@@ -484,12 +511,13 @@ final class AppController {
     }
 
     /// Saves a recording still in progress before quitting, so it can be retried from Recent.
+    /// The recording in progress is saved by `AppDelegate.applicationWillTerminate`.
     func quit() {
-        finishRecording()
         NSApp.terminate(nil)
     }
 
     func relaunch() {
+        // Saved before the new instance reads the history, not when this one terminates.
         finishRecording()
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true

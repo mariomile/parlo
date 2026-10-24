@@ -5,12 +5,14 @@ import Testing
 actor FakeInstaller: ModelInstaller {
     var installed: Set<ModelID> = [.appleSpeech]
     var failInstall = false
+    var failUninstall = false
     var hang = false
     var uninstalled: [ModelID] = []
     var made: [ModelID] = []
 
     func setFail(_ v: Bool) { failInstall = v }
     func setHang(_ v: Bool) { hang = v }
+    func setFailUninstall(_ v: Bool) { failUninstall = v }
 
     func isInstalled(_ id: ModelID) async -> Bool { installed.contains(id) }
 
@@ -23,6 +25,7 @@ actor FakeInstaller: ModelInstaller {
     }
 
     func uninstall(_ id: ModelID) async throws {
+        if failUninstall { throw FailingError() }
         installed.remove(id)
         uninstalled.append(id)
     }
@@ -85,13 +88,23 @@ actor FakeInstaller: ModelInstaller {
         #expect(await inst.uninstalled == [.whisperTiny])
     }
 
-    @Test func selectPersistsAndDeleteActiveFallsBack() async {
+    @Test func failedDeleteKeepsTheActiveModel() async {
+        let installer = FakeInstaller()
+        let m = ModelManager(installer: installer, activeModelID: .appleSpeech) { _ in }
+        await m.download(.parakeetV3)
+        m.select(.parakeetV3)
+        await installer.setFailUninstall(true)
+        await #expect(throws: FailingError.self) { try await m.delete(.parakeetV3) }
+        #expect(m.activeModelID == .parakeetV3)
+    }
+
+    @Test func selectPersistsAndDeleteActiveFallsBack() async throws {
         var persisted: [ModelID] = []
         let m = ModelManager(installer: FakeInstaller(), activeModelID: .appleSpeech) { persisted.append($0) }
         await m.download(.parakeetV3)
         m.select(.parakeetV3)
         #expect(m.activeModelID == .parakeetV3)
-        await m.delete(.parakeetV3)
+        try await m.delete(.parakeetV3)
         #expect(m.activeModelID == .appleSpeech)
         #expect(m.states[.parakeetV3] == .notInstalled)
         #expect(persisted == [.parakeetV3, .appleSpeech])

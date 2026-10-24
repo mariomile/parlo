@@ -89,4 +89,16 @@ import Testing
         #expect(s.snippets.map(\.trigger) == ["addr"])
         #expect(s.hasCompletedOnboarding == false)
     }
+
+    @Test func apiKeyBelongsToTheServer() {
+        func scope(_ url: String) -> String? {
+            LLMSettings(enabled: true, provider: .openAICompatible, baseURL: url, model: "m").keyScope
+        }
+        #expect(scope("https://api.groq.com/openai/v1") == "api.groq.com")
+        #expect(scope(" https://API.OpenAI.com/v1/ ") == "api.openai.com")
+        #expect(scope("http://localhost:11434/v1") == "localhost:11434")
+        #expect(scope("https://api.groq.com/openai/v1") != scope("https://api.groq.com.evil.example/v1"))
+        #expect(scope("not a url") == nil)
+        #expect(scope("") == nil)
+    }
 }

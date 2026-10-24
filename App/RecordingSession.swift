@@ -15,6 +15,8 @@ final class RecordingSession {
     struct Finished {
         let recording: Recording
         let samples: [Float]
+        /// Recorded with the system default because the chosen microphone wasn't available.
+        let usedFallback: Bool
     }
 
     private(set) var current: Recording?
@@ -85,6 +87,6 @@ final class RecordingSession {
         timer = nil
         let samples = recorder.stop()
         current = nil
-        return Finished(recording: rec, samples: samples)
+        return Finished(recording: rec, samples: samples, usedFallback: recorder.usedFallback)
     }
 }

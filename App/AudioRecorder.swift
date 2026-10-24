@@ -60,6 +60,8 @@ final class AudioRecorder {
     private var isRecording = false
     /// Bumped by every start and stop, so a restart scheduled for an earlier recording does nothing.
     private var generation = 0
+    /// The chosen microphone couldn't be used at some point of this recording, so the system default was.
+    private(set) var usedFallback = false
 
     /// RMS of the latest buffer, 0...~1.
     var level: Float { sink.level }
@@ -74,6 +76,7 @@ final class AudioRecorder {
         _ = stop()
         generation += 1
         sink.reset()
+        usedFallback = false
         self.deviceUID = deviceUID
         try startEngine()
         isRecording = true
@@ -93,10 +96,13 @@ final class AudioRecorder {
         let input = engine.inputNode
         // A chosen microphone that is unplugged, or refuses to be selected, leaves the system default in place:
         // dictating with another mic beats not dictating.
-        if let deviceUID, let deviceID = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
-            var id = deviceID
-            _ = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                     &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if let deviceUID {
+            var selected = false
+            if var id = AudioDevices.deviceID(forUID: deviceUID), let unit = input.audioUnit {
+                selected = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                                &id, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr
+            }
+            if !selected { usedFallback = true }
         }
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { throw RecorderError.noMicrophone }

@@ -61,6 +61,13 @@ public struct LLMSettings: Codable, Equatable, Sendable {
         self.model = model
     }
 
+    /// The server an API key belongs to, "host" or "host:port"; nil while the base URL has no host.
+    public var keyScope: String? {
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let host = url.host()?.lowercased(), !host.isEmpty else { return nil }
+        return url.port.map { "\(host):\($0)" } ?? host
+    }
+
     public static let `default` = LLMSettings(
         enabled: false,
         provider: .apple,

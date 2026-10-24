@@ -53,6 +53,10 @@ import Testing
         #expect(try await p.run(oneSecond, .dictation(bundleID: nil)) == .empty)
     }
 
+    @Test func stalledSpeechCheckStillTranscribes() async throws {
+        #expect(try await TranscriptionJob.heardSpeech(StalledSpeechDetector(), oneSecond, timeout: 0.05))
+    }
+
     @Test func speechIsTranscribed() async throws {
         let p = TranscriptionJob(
             transcriber: FakeTranscriber(text: "ciao"), llm: nil, settings: settings,

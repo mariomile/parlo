@@ -16,7 +16,8 @@ public final class TranscriberGate {
     private let previewGrace: Double
     /// Someone holds the transcriber; whoever is waiting starts when it is released.
     private var busy = false
-    private var waiting: [(background: Bool, start: () -> Void)] = []
+    private var waiting: [Waiter] = []
+    private var nextWaiter = 0
     /// May outlive its caller: a CoreML or MLX call can't be interrupted.
     private var preview: Task<String?, Never>?
 
@@ -36,7 +37,7 @@ public final class TranscriberGate {
         _ job: @escaping (any Transcriber) async throws -> Void, onError: @escaping (any Error) -> Void
     ) {
         pendingJobs += 1
-        schedule(background: false) {
+        schedule(Waiter(id: takeID(), background: false, cancel: {}) {
             Task {
                 do {
                     try await self.job(job)
@@ -46,24 +47,41 @@ public final class TranscriberGate {
                 self.pendingJobs -= 1
                 self.release()
             }
-        }
+        })
     }
 
     /// Runs `work` once the transcriber is free and no dictation is waiting for it, so a long audio file
-    /// sent piece by piece never holds up a dictation by more than one piece.
+    /// sent piece by piece never holds up a dictation by more than one piece. Cancelling while it waits
+    /// leaves the queue at once.
     public func runInBackground<T: Sendable>(_ work: @escaping (any Transcriber) async throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            schedule(background: true) {
-                Task {
-                    do {
-                        continuation.resume(returning: try await self.job(work))
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                    self.release()
-                }
+        try await turn(background: true)
+        defer { release() }
+        return try await job(work)
+    }
+
+    /// Waits until the caller holds the transcriber.
+    private func turn(background: Bool) async throws {
+        let id = takeID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, any Error>) in
+                if Task.isCancelled { return c.resume(throwing: CancellationError()) }
+                schedule(Waiter(id: id, background: background, cancel: { c.resume(throwing: CancellationError()) }) {
+                    c.resume()
+                })
             }
+        } onCancel: {
+            Task { @MainActor in self.withdraw(id) }
         }
+    }
+
+    private func withdraw(_ id: Int) {
+        guard let i = waiting.firstIndex(where: { $0.id == id }) else { return }
+        waiting.remove(at: i).cancel()
+    }
+
+    private func takeID() -> Int {
+        nextWaiter += 1
+        return nextWaiter
     }
 
     private func job<T>(_ work: (any Transcriber) async throws -> T) async throws -> T {
@@ -76,12 +94,19 @@ public final class TranscriberGate {
         }
     }
 
-    private func schedule(background: Bool, _ start: @escaping () -> Void) {
+    private struct Waiter {
+        let id: Int
+        let background: Bool
+        let cancel: () -> Void
+        let start: () -> Void
+    }
+
+    private func schedule(_ waiter: Waiter) {
         guard busy else {
             busy = true
-            return start()
+            return waiter.start()
         }
-        waiting.append((background, start))
+        waiting.append(waiter)
     }
 
     /// Dictations first, each kind in the order it arrived.

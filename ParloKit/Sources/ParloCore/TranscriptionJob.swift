@@ -59,10 +59,24 @@ public struct TranscriptionJob: Sendable {
 
     /// Throws `DeadlineExceeded` when the engine stops answering, so one stuck job can't hold the queue.
     /// The LLM calls have their own timeouts.
+    /// Longest the speech check may take before the recording is transcribed anyway.
+    static let speechCheckTimeout: Double = 10
+
+    /// A detector that stops answering must not hold the dictation: the engine gets the audio regardless.
+    static func heardSpeech(
+        _ speech: any SpeechDetector, _ samples: [Float], timeout: Double = speechCheckTimeout
+    ) async throws -> Bool {
+        do {
+            return try await Deadline.run(seconds: timeout) { try await speech.containsSpeech(samples) }
+        } catch is DeadlineExceeded {
+            return true
+        }
+    }
+
     public func run(_ samples: [Float], _ kind: JobKind) async throws -> JobOutcome {
         if case .command = kind, llm == nil { throw CommandError.llmNotConfigured }
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else { return .discarded }
-        if let speech, try await !speech.containsSpeech(samples) { return .empty }
+        if let speech, try await !Self.heardSpeech(speech, samples) { return .empty }
         switch kind {
         case let .dictation(bundleID):
             let raw = try await transcribe(samples, dictionary: settings.dictionary)

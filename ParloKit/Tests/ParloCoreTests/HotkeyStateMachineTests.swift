@@ -222,7 +222,7 @@ import Testing
         #expect(m.handle(fn: true, ctrl: false, at: 30) == .stop)
     }
 
-    @Test func handsFreeLimitStops() {
+    @Test func recordingLimitStops() {
         var m = HotkeyStateMachine()
         _ = m.handle(fn: true, ctrl: false, at: 0)
         _ = m.handle(fn: false, ctrl: false, at: 0.1)
@@ -230,18 +230,43 @@ import Testing
         _ = m.handle(fn: false, ctrl: false, at: 0.4)
         // Poll times are on their own clock: the limit counts from the first poll.
         #expect(m.poll(fnHeld: false, at: 5000) == nil)
-        #expect(m.poll(fnHeld: false, at: 5000 + HotkeyStateMachine.handsFreeLimit - 1) == nil)
-        #expect(m.poll(fnHeld: false, at: 5000 + HotkeyStateMachine.handsFreeLimit) == .stop)
+        #expect(m.poll(fnHeld: false, at: 5000 + HotkeyStateMachine.recordingLimit - 1) == nil)
+        #expect(m.poll(fnHeld: false, at: 5000 + HotkeyStateMachine.recordingLimit) == .stop)
         #expect(m.handle(fn: true, ctrl: false, at: 700) == .startDictation)
     }
 
-    @Test func handsFreeLimitWithFnDownIgnoresItsRelease() {
+    @Test func heldRecordingStopsAtTheLimitWhenFnIsNeverSeen() {
+        var m = HotkeyStateMachine()
+        #expect(m.handle(fn: true, ctrl: false, at: 0) == .startDictation)
+        #expect(m.poll(fnHeld: false, at: 100) == nil)
+        #expect(m.poll(fnHeld: false, at: 100 + HotkeyStateMachine.recordingLimit) == .stop)
+        #expect(m.handle(fn: false, ctrl: false, at: 700) == nil)
+    }
+
+    @Test func otherModifierAfterACancelDoesNotStartAgain() {
+        var m = HotkeyStateMachine()
+        #expect(m.handle(fn: true, ctrl: false, at: 0) == .startDictation)
+        #expect(m.keyPressed(at: 0.1) == .cancel(handsFree: false))
+        // Shift while Fn is still down reports Fn unchanged.
+        #expect(m.handle(fn: true, ctrl: false, at: 0.5, fnKey: false) == nil)
+        #expect(m.handle(fn: false, ctrl: false, at: 0.6) == nil)
+        #expect(m.handle(fn: true, ctrl: false, at: 2) == .startDictation)
+    }
+
+    @Test func fnPressAfterAMissedReleaseStartsAgain() {
+        var m = HotkeyStateMachine()
+        #expect(m.handle(fn: true, ctrl: false, at: 0) == .startDictation)
+        #expect(m.keyPressed(at: 0.1) == .cancel(handsFree: false))
+        #expect(m.handle(fn: true, ctrl: false, at: 3, fnKey: true) == .startDictation)
+    }
+
+    @Test func recordingLimitWithFnDownIgnoresItsRelease() {
         var m = HotkeyStateMachine()
         _ = m.handle(fn: true, ctrl: false, at: 0)
         _ = m.handle(fn: false, ctrl: false, at: 0.1)
         _ = m.handle(fn: true, ctrl: false, at: 0.3)
         #expect(m.poll(fnHeld: true, at: 0) == nil)
-        #expect(m.poll(fnHeld: true, at: HotkeyStateMachine.handsFreeLimit) == .stop)
+        #expect(m.poll(fnHeld: true, at: HotkeyStateMachine.recordingLimit) == .stop)
         #expect(m.handle(fn: false, ctrl: false, at: 601) == nil)
         #expect(m.handle(fn: true, ctrl: false, at: 602) == .startDictation)
     }

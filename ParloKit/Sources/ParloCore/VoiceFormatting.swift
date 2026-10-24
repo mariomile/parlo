@@ -22,8 +22,9 @@ public enum VoiceFormatting {
         // A preposition or article after the phrase means it's a normal phrase: "a capo del progetto",
         // ", a capo dell'ufficio,", "new line of products".
         let normalUse = "(?!\\s+(?:(?:del|della|dello|dei|degli|delle|di|of|for)(?![\\p{L}])|dell['’]|d['’]))"
-        // 1: punctuation before the phrase (or none at the start); 2...: one group per command, in order.
-        let pattern = "(?:^|([.!?:,;]))\\s*(?:" + alternatives + ")(?![\\p{L}\\p{N}_])" + normalUse + "[\\s,.;:]*"
+        // 1: punctuation before the phrase (or none at the start, or right after the previous command,
+        // whose trailing punctuation was already taken); 2...: one group per command, in order.
+        let pattern = "(?:^|\\G|([.!?:,;]))\\s*(?:" + alternatives + ")(?![\\p{L}\\p{N}_])" + normalUse + "[\\s,.;:]*"
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
@@ -41,7 +42,9 @@ public enum VoiceFormatting {
             last = match.range.location + match.range.length
             capitalizeNext = true
         }
-        return result + capitalizeFirst(ns.substring(from: last), capitalizeNext)
+        result += capitalizeFirst(ns.substring(from: last), capitalizeNext)
+        // A paragraph then a bullet is one blank line, not two.
+        return result.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
     }
 
     /// The output of the command whose group matched.

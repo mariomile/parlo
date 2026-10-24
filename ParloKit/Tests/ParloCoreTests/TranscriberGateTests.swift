@@ -134,6 +134,30 @@ final class SlowTranscriber: Transcriber, @unchecked Sendable {
         #expect(try await g.runInBackground { _ in "next" } == "next")
     }
 
+    @Test func cancelledBackgroundWorkLeavesTheQueue() async throws {
+        let g = gate(FakeTranscriber(text: ""))
+        let hold = LockedBox(true)
+        var ran: [String] = []
+        g.enqueue({ _ in while hold.value { try await Task.sleep(for: .milliseconds(2)) } }, onError: { _ in })
+        let queued = Task { try await g.runInBackground { _ in ran.append("cancelled") } }
+        try await Task.sleep(for: .milliseconds(10))
+        queued.cancel()
+        await #expect(throws: CancellationError.self) { try await queued.value }
+        hold.value = false
+        try await waitUntil { g.pendingJobs == 0 }
+        #expect(try await g.runInBackground { _ in "next" } == "next")
+        #expect(ran.isEmpty)
+    }
+
+    @Test func modelLoadErrorReleasesTheTranscriber() async throws {
+        let g = TranscriberGate(transcriber: { throw FailingError() }, reload: {})
+        await #expect(throws: FailingError.self) { try await g.runInBackground { _ in "never" } }
+        var errors = 0
+        g.enqueue({ _ in }, onError: { _ in errors += 1 })
+        try await waitUntil { g.pendingJobs == 0 }
+        #expect(errors == 1)
+    }
+
     @Test func previewerShowsTextWhileIdle() async throws {
         let g = gate(FakeTranscriber(text: " ciao "))
         let previewer = LivePreviewer(gate: g, interval: 0.01)

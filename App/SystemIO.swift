@@ -24,6 +24,8 @@ struct PasteboardSnapshot {
     let items: [[NSPasteboard.PasteboardType: Data]]
 
     static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    /// Set by password managers on what they copy.
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
 
     init(_ pb: NSPasteboard = .general) {
         items = (pb.pasteboardItems ?? []).map { item in
@@ -59,14 +61,22 @@ enum ClipboardTurn {
 }
 
 enum TextInserter {
+    enum Outcome {
+        case pasted
+        /// The app never read the text; it's left on the clipboard for the user to paste themselves.
+        case leftOnClipboard
+        /// The app never read the text, and something else wrote the clipboard meanwhile.
+        case lost
+    }
+
     /// Pastes `text` into the focused field, then puts the user's clipboard back.
-    static func insert(_ text: String) async {
+    static func insert(_ text: String) async -> Outcome {
         await ClipboardTurn.take { await paste(text) }
     }
 
     /// The user's clipboard goes back once the target app has read the text, not after a guessed delay:
     /// a busy app that pastes late would otherwise paste the user's old clipboard instead.
-    private static func paste(_ text: String) async {
+    private static func paste(_ text: String) async -> Outcome {
         let pb = NSPasteboard.general
         let saved = PasteboardSnapshot(pb)
         let provider = PasteProvider(text: text)
@@ -76,13 +86,23 @@ enum TextInserter {
         pb.clearContents()
         pb.writeObjects([item])
         let ours = pb.changeCount
+        let posted = ContinuousClock.now
         KeyPoster.paste()
-        // Up to 3 s for the read (a field that can't take text never reads), then a beat for apps that read twice.
+        // Up to 3 s for the read (a field that can't take text never reads).
         for _ in 0..<150 where !provider.wasRead {
             try? await Task.sleep(for: .milliseconds(20))
         }
-        if provider.wasRead { try? await Task.sleep(for: .milliseconds(150)) }
+        guard pb.changeCount == ours else { return provider.wasRead ? .pasted : .lost }
+        guard provider.wasRead else {
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+            return .leftOnClipboard
+        }
+        // A beat for apps that read twice, and never sooner than 0.6 s after the keystroke: some read
+        // the clipboard once to check it and again when they actually paste.
+        try? await Task.sleep(until: max(.now + .milliseconds(150), posted + .milliseconds(600)))
         if pb.changeCount == ours { saved.restore(pb) }
+        return .pasted
     }
 }
 
@@ -110,7 +130,6 @@ enum SelectionReader {
     }
 
     /// Waits up to 1 s: busy Electron apps can take a while to answer Cmd+C.
-
     private static func copySelection() async -> String? {
         let pb = NSPasteboard.general
         let saved = PasteboardSnapshot(pb)
@@ -120,6 +139,10 @@ enum SelectionReader {
             try? await Task.sleep(for: .milliseconds(20))
         }
         guard pb.changeCount != before else { return nil }
+        // Something else wrote the clipboard meanwhile, a password manager say: not the selection, and not ours to undo.
+        let types = pb.types ?? []
+        guard !types.contains(PasteboardSnapshot.concealedType), !types.contains(PasteboardSnapshot.transientType)
+        else { return nil }
         let text = pb.string(forType: .string)
         saved.restore(pb)
         return text?.isEmpty == false ? text : nil

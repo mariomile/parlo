@@ -23,8 +23,10 @@ public struct SettingsStore: Sendable {
         } catch {
             let ts = Int(Date().timeIntervalSince1970)
             let aside = directory.appendingPathComponent("settings.corrupt-\(ts).json")
-            try? FileManager.default.moveItem(at: fileURL, to: aside)
-            return (.default, aside)
+            // The bytes already read are kept even when the file can't be moved.
+            let kept = (try? FileManager.default.moveItem(at: fileURL, to: aside)) != nil
+                || (try? data.write(to: aside, options: .atomic)) != nil
+            return (.default, kept ? aside : nil)
         }
     }
 
