@@ -1,5 +1,4 @@
 import Foundation
-import HuggingFace
 import MLX
 import MLXAudioSTT
 import ParloCore
@@ -12,35 +11,14 @@ enum Qwen3ASRBackend {
         SettingsStore.appSupportDirectory.appendingPathComponent("Models/qwen3-asr-1.7b-4bit", isDirectory: true)
     }
 
-    /// Downloads land here first and move to `directory` when complete, so a half-finished download never counts as installed.
-    private static var partialDirectory: URL {
-        directory.deletingLastPathComponent().appendingPathComponent("qwen3-asr-1.7b-4bit.partial", isDirectory: true)
-    }
-
     static var isInstalled: Bool {
         ["config.json", "model.safetensors", "vocab.json", "merges.txt"].allSatisfy {
             FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
         }
     }
 
-    /// The Hub client copies a snapshot out of its cache, so the cache lives next to the download and is deleted afterwards.
-    private static var scratchCache: URL {
-        directory.deletingLastPathComponent().appendingPathComponent("qwen3-asr-1.7b-4bit.cache", isDirectory: true)
-    }
-
     static func install(progress: @escaping @Sendable (Double) -> Void) async throws {
-        let fm = FileManager.default
-        try fm.createDirectory(at: partialDirectory, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: scratchCache) }
-        let client = HubClient(cache: HubCache(cacheDirectory: scratchCache))
-        _ = try await client.downloadSnapshot(
-            of: Repo.ID(rawValue: repo)!,
-            to: partialDirectory,
-            matching: ["*.safetensors", "*.json", "*.txt"]
-        ) { progress($0.fractionCompleted) }
-        try Task.checkCancellation()
-        if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
-        try fm.moveItem(at: partialDirectory, to: directory)
+        try await HubSnapshot.install(repo, to: directory, matching: ["*.safetensors", "*.json", "*.txt"], progress: progress)
     }
 
     static func makeTranscriber() async throws -> any Transcriber {

@@ -41,6 +41,8 @@ public struct Snippet: Codable, Equatable, Identifiable, Sendable {
 public enum LLMProvider: String, Codable, Sendable {
     /// Apple Intelligence's on-device model: no key, nothing leaves the Mac.
     case apple
+    /// An open model downloaded by Parlo and run in-process with MLX: no key, no server, nothing leaves the Mac.
+    case local
     /// Any `/chat/completions` endpoint: Groq, OpenAI, OpenRouter, Ollama.
     case openAICompatible
 }

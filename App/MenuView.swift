@@ -160,6 +160,7 @@ struct MenuView: View {
     private var providerName: String {
         let llm = controller.settings.llm
         if llm.provider == .apple { return "Apple Intelligence, on this Mac" }
+        if llm.provider == .local { return "\(LocalLLM.displayName), on this Mac" }
         return URL(string: llm.baseURL)?.host().map { "\(llm.model) via \($0)" } ?? llm.model
     }
 
@@ -170,6 +171,10 @@ struct MenuView: View {
         }
         if Permissions.globeKeyConflicts { return ("Set “Press 🌐 key to” to Do Nothing", nil) }
         if controller.aiNeedsKey { return ("AI cleanup needs an API key", .ai) }
+        if controller.settings.llm.enabled, controller.settings.llm.provider == .local,
+           controller.localLLM.state != .installed {
+            return ("AI cleanup: download \(LocalLLM.displayName)", .ai)
+        }
         if controller.settings.llm.enabled, controller.settings.llm.provider == .apple,
            let reason = AppleIntelligenceClient.unavailableReason {
             return ("Apple Intelligence: \(reason.lowercased())", .ai)

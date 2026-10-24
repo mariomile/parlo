@@ -14,6 +14,7 @@ final class AppController {
             do { try store.save(settings) } catch {
                 hud.show(.message("Couldn't save settings: \(error.localizedDescription)", isError: true))
             }
+            if settings.llm != oldValue.llm { syncLocalLLM() }
         }
     }
     /// Cached so the keychain is read once per launch.
@@ -28,6 +29,7 @@ final class AppController {
     private(set) var hotkeyActive = false
     var settingsTab: SettingsTab = .general
     let models: ModelManager
+    let localLLM = LocalLLMManager(installer: LocalLLMInstaller())
 
     private let store: SettingsStore
     private let hud = HUDController()
@@ -82,6 +84,8 @@ final class AppController {
             models.warmUp()
         }
         Task { speechDetector = try? await SileroSpeechDetector.load() }
+        Task { await localLLM.refresh() }
+        syncLocalLLM()
         if !settings.hasCompletedOnboarding || !Permissions.allGranted { showOnboarding() }
     }
 
@@ -111,8 +115,19 @@ final class AppController {
         guard settings.llm.enabled else { return nil }
         return switch settings.llm.provider {
         case .apple: AppleIntelligenceClient()
+        case .local: LocalLLMClient()
         case .openAICompatible: LLMClient(settings: settings.llm, apiKey: apiKey)
         }
+    }
+
+    /// The local model stays in memory while cleanup uses it, so only the first cleanup waits for it to load.
+    private func syncLocalLLM() {
+        if settings.llm.enabled && settings.llm.provider == .local { LocalLLM.warmUp() } else { LocalLLM.unload() }
+    }
+
+    func downloadLocalLLM() async {
+        await localLLM.download()
+        syncLocalLLM()
     }
 
     var statusText: String {
