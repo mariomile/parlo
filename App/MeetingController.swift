@@ -121,9 +121,10 @@ final class MeetingController {
                 languageCode: context.languageCode, dictionary: context.dictionary
             )
             // Transcription is most of the work; the notes are the last tenth.
-            let share = Double(me.count) / Double(max(me.count + them.count, 1))
-            let mine = try await tracks.turns(me, speaker: .me) { [weak self] p in self?.advance(id, to: p * share * 0.9) }
-            let theirs = try await tracks.turns(them, speaker: .them) { [weak self] p in
+            // Theirs first: my track is cut where they speak, so what the microphone heard from the speakers drops out.
+            let share = Double(them.count) / Double(max(me.count + them.count, 1))
+            let theirs = try await tracks.turns(them, speaker: .them) { [weak self] p in self?.advance(id, to: p * share * 0.9) }
+            let mine = try await tracks.turns(me, speaker: .me, cutAt: theirs.flatMap { [$0.start, $0.end] }) { [weak self] p in
                 self?.advance(id, to: (share + p * (1 - share)) * 0.9)
             }
             let turns = MeetingTranscript.merge(me: mine, them: theirs)

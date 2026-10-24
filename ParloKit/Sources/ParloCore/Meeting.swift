@@ -90,13 +90,16 @@ public enum MeetingTranscript {
         return (mine + them).sorted { ($0.start, $0.speaker == .them ? 1 : 0) < ($1.start, $1.speaker == .them ? 1 : 0) }
     }
 
-    /// A turn of mine is an echo when it overlaps turns of theirs that contain most of its words.
+    /// A turn of mine is an echo when most of it happens while they speak, in turns that contain most of its
+    /// words: the speakers reach the microphone at once. A reply that reuses their words comes after them.
     /// Short turns ("yes", "right") are always kept: too few words to tell.
-    public static func isEcho(_ turn: MeetingTurn, of them: [MeetingTurn], tolerance: Double = 1.5) -> Bool {
+    public static func isEcho(_ turn: MeetingTurn, of them: [MeetingTurn]) -> Bool {
         guard words(turn.text).count >= 4 else { return false }
         let mine = Set(contentWords(turn.text))
         guard !mine.isEmpty else { return false }
-        let overlapping = them.filter { $0.start - tolerance < turn.end && turn.start < $0.end + tolerance }
+        let overlapping = them.filter { $0.start < turn.end && turn.start < $0.end }
+        let together = overlapping.reduce(0) { $0 + min($1.end, turn.end) - max($1.start, turn.start) }
+        guard together >= (turn.end - turn.start) / 2 else { return false }
         let theirs = Set(overlapping.flatMap { contentWords($0.text) })
         let shared = mine.intersection(theirs).count
         return shared >= 2 && Double(shared) / Double(mine.count) >= 0.5

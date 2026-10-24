@@ -100,14 +100,17 @@ public struct MeetingTrackTranscriber: Sendable {
 
     /// A stretch that fails is left out rather than costing the whole meeting; only when every one fails
     /// does the error come through.
+    /// `cuts`, in seconds, split stretches where the other side starts and stops: without headphones the microphone
+    /// hears them too, and their words then land in a turn of their own that `MeetingTranscript.merge` can drop.
     public func turns(
-        _ samples: [Float], speaker: MeetingTurn.Speaker, onProgress: @Sendable (Double) -> Void
+        _ samples: [Float], speaker: MeetingTurn.Speaker, cutAt cuts: [Double] = [], onProgress: @Sendable (Double) -> Void
     ) async throws -> [MeetingTurn] {
         guard !RecordingGuard.isDigitalSilence(samples) else {
             onProgress(1)
             return []
         }
-        let ranges = try await segmenter?.speechRanges(samples) ?? AudioChunker.ranges(samples, maxSeconds: 30)
+        let found = try await segmenter?.speechRanges(samples) ?? AudioChunker.ranges(samples, maxSeconds: 30)
+        let ranges = Self.split(found, at: cuts.map(Audio.sampleCount))
         var turns: [MeetingTurn] = []
         var firstError: (any Error)?
         var attempted = 0
@@ -134,5 +137,14 @@ public struct MeetingTrackTranscriber: Sendable {
         }
         if let firstError, turns.isEmpty, attempted > 0 { throw firstError }
         return turns
+    }
+
+    static func split(_ ranges: [Range<Int>], at cuts: [Int]) -> [Range<Int>] {
+        let cuts = cuts.sorted()
+        return ranges.flatMap { range in
+            let inside = cuts.filter { range.lowerBound < $0 && $0 < range.upperBound }
+            let bounds = [range.lowerBound] + inside + [range.upperBound]
+            return zip(bounds, bounds.dropFirst()).map { $0..<$1 }
+        }
     }
 }

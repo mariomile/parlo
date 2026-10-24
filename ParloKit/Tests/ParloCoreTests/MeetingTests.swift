@@ -22,6 +22,12 @@ import Testing
         #expect(merged.last?.text == reply.text)
     }
 
+    @Test func keepsMyQuestionWhenTheirAnswerRepeatsItsWords() {
+        let question = turn(.me, 0, 2.9, "Can you send me the budget for the launch by Friday?")
+        let them = [turn(.them, 3.9, 6.8, "Sure, I will send the budget on Thursday morning.")]
+        #expect(!MeetingTranscript.isEcho(question, of: them))
+    }
+
     @Test func keepsMyTurnThatOnlySharesAWord() {
         let them = [turn(.them, 0, 5, "The budget review is on Monday morning")]
         let mine = turn(.me, 1, 5, "Monday is impossible for me, I'm travelling")
@@ -218,6 +224,18 @@ import Testing
         let turns = try await track.turns(samples, speaker: .them) { progress.value.append($0) }
         #expect(turns == [MeetingTurn(speaker: .them, start: 1, end: 3, text: "Hello")])
         #expect(progress.value == [0.5, 1])
+    }
+
+    @Test func stretchIsCutWhereTheOtherSideStartsAndStops() async throws {
+        let samples = [Float](repeating: 0.1, count: 10 * Audio.sampleRate)
+        let segmenter = Segmenter(ranges: [0..<Audio.sampleCount(9)])
+        let track = MeetingTrackTranscriber(
+            transcriber: ScriptedTranscriber([.success("Mine"), .success("Echo"), .success("Mine again")]), segmenter: segmenter,
+            languageCode: nil, dictionary: []
+        )
+        let turns = try await track.turns(samples, speaker: .me, cutAt: [3, 6, 12]) { _ in }
+        #expect(turns.map { [$0.start, $0.end] } == [[0, 3], [3, 6], [6, 9]])
+        #expect(turns.map(\.text) == ["Mine", "Echo", "Mine again"])
     }
 
     @Test func oneFailedStretchCostsOnlyItself() async throws {

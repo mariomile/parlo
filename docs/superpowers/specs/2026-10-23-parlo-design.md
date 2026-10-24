@@ -34,7 +34,15 @@ Audience: the author's personal use first, product later. v1 is built clean enou
 8. Settings window and first-run permissions checklist.
 
 ### Out of v1
-Meeting notetaker, dictation history, code signing/notarization/auto-update (Sparkle), Windows/iOS, live streaming transcription while speaking, bundled local LLM (Ollama works through the endpoint setting).
+Dictation history, code signing/notarization/auto-update (Sparkle), Windows/iOS, live streaming transcription while speaking, bundled local LLM (Ollama works through the endpoint setting).
+
+### Meeting notetaker (after v1)
+Started and stopped from the menu bar, for a call in any app.
+1. **Capture.** The microphone is "Me". Everything the Mac plays except Parlo is "Them", through a Core Audio process tap on a private aggregate device built on the current output and rebuilt when the output changes. It needs "System Audio Recording Only" permission (`NSAudioCaptureUsageDescription`); when that's denied the buffers are silent, so a silent "Them" track is reported in the meeting.
+2. **Storage.** Each track is written to its own 16-bit CAF as it is captured (`TrackWriter`), padded with silence to the meeting's clock so the two tracks stay aligned. A quit, logout or crash keeps what was written; the meeting is marked interrupted, to process again.
+3. **Transcription.** After stop, each track is split at speech by Silero VAD (pieces of at most 14 s), or every 30 s at its quietest points when Silero isn't loaded. The pieces are transcribed with the active model in the background, behind any dictation, then merged into timed turns, Me and Them.
+4. **Notes.** These come from the AI provider chosen for cleanup, even with cleanup off. Long meetings are read in parts that fit the provider (Apple Intelligence 4k characters, the MLX model 12k, a hosted model 48k), then the parts' points are merged. The result has a title, a summary, decisions and action items. A notes failure keeps the transcript and says why.
+5. **UI.** A Meetings window lists the meetings, with progress, notes, the transcript, copy and export as Markdown, process again, and delete. The five newest finished meetings keep their audio; older ones keep only the text.
 
 ## Model catalog
 
