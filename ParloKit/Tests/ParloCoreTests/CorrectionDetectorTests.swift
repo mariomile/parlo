@@ -28,6 +28,12 @@ import Testing
         #expect(suggest("Apri Clade.", "Apri Claude.")?.term == "Claude")
     }
 
+    @Test func digitsDoNotCountTowardsSimilarity() {
+        let s = suggest("Apri Clod 4.", "Apri Claude 5.")
+        #expect(s?.term == "Claude 5")
+        #expect(s?.heardAs == ["Clod 4"])
+    }
+
     @Test func caseOnlyFixKeepsTheSpelling() {
         let s = suggest("Il repo è su github.", "Il repo è su GitHub.")
         #expect(s?.term == "GitHub")

@@ -24,7 +24,8 @@ public enum DictionaryReplacer {
         return result
     }
 
-    /// Capitals after the first letter, digits or symbols: case a speech model won't guess.
+    /// Capitals after the first letter, digits or symbols: case a speech model won't guess. Also what
+    /// CorrectionDetector counts as a term, besides a capitalized first letter.
     static func hasOwnSpelling(_ term: String) -> Bool {
         term.dropFirst().contains(where: \.isUppercase) || term.contains { $0.isNumber || !($0.isLetter || $0 == " ") }
     }

@@ -40,7 +40,7 @@ public enum CorrectionDetector {
         let caseOnly = heard.lowercased() == term.lowercased()
         if !caseOnly {
             // An ordinary lowercase word replaced by another is a wording fix, not a misheard term.
-            let termLike = term.contains { $0.isUppercase || $0.isNumber || !($0.isLetter || $0 == " ") }
+            let termLike = DictionaryReplacer.hasOwnSpelling(term) || term.first?.isUppercase == true
             guard termLike || heardWords != termWords else { return nil }
             guard !onlyEndingDiffers(heard, term) else { return nil }
         }
@@ -63,6 +63,7 @@ public enum CorrectionDetector {
         return shared >= 3 && x.count - shared <= 2 && y.count - shared <= 2
     }
 
+    /// The lowercased letters of `s`: digits and symbols don't count towards length, ending or similarity.
     private static func letters(_ s: String) -> [Character] {
         Array(s.lowercased().filter(\.isLetter))
     }
@@ -77,20 +78,20 @@ public enum CorrectionDetector {
 
     /// 1 minus the edit distance between the letters of `a` and `b`, relative to the longer one.
     static func similarity(_ a: String, _ b: String) -> Double {
-        let x = Array(a.lowercased().filter { $0.isLetter || $0.isNumber })
-        let y = Array(b.lowercased().filter { $0.isLetter || $0.isNumber })
-        guard !x.isEmpty || !y.isEmpty else { return 1 }
+        let x = letters(a), y = letters(b)
+        let longest = max(x.count, y.count)
+        if longest == 0 { return 1 }
+        if x.isEmpty || y.isEmpty { return 0 }
         var row = Array(0...y.count)
-        for i in 1...max(x.count, 1) where !x.isEmpty {
+        for i in 1...x.count {
             var previous = row[0]
             row[0] = i
-            for j in stride(from: 1, through: y.count, by: 1) {
+            for j in 1...y.count {
                 let current = row[j]
                 row[j] = min(row[j] + 1, row[j - 1] + 1, previous + (x[i - 1] == y[j - 1] ? 0 : 1))
                 previous = current
             }
         }
-        let distance = x.isEmpty ? y.count : row[y.count]
-        return 1 - Double(distance) / Double(max(x.count, y.count))
+        return 1 - Double(row[y.count]) / Double(longest)
     }
 }
