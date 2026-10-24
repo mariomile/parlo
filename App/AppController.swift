@@ -33,6 +33,7 @@ final class AppController {
     private let hud = HUDController()
     private let recorder = AudioRecorder()
     private let hotkey = HotkeyMonitor()
+    private let preview = LivePreviewer()
     private struct Recording {
         let command: Bool
         let bundleID: String?
@@ -171,6 +172,7 @@ final class AppController {
         )
         updatePhase()
         hud.show(.recording(command: command))
+        startPreview()
         levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -193,6 +195,21 @@ final class AppController {
         guard recording != nil else { return hotkey.reset() }
         recording?.locked = true
         hud.model.handsFree = true
+    }
+
+    /// Shows the words recognized so far in the HUD. Display only: the pasted text comes from `process`.
+    private func startPreview() {
+        guard LivePreview.supports(models.activeInfo) else { return }
+        preview.start(
+            transcriber: { [weak self] in try? await self?.models.transcriber() },
+            languageCode: settings.languageCode,
+            samples: { [weak self] in self?.recorder.recentSamples($0) ?? [] },
+            isBusy: { [weak self] in (self?.pendingJobs ?? 0) > 0 },
+            show: { [weak self] text in
+                guard let self, recording != nil else { return }
+                hud.model.liveText = text
+            }
+        )
     }
 
     /// The event tap can miss fn's release (it is switched off while the system is busy). If the keyboard
@@ -250,6 +267,7 @@ final class AppController {
         stopping?.cancel()
         stopping = nil
         guard let rec = recording else { return nil }
+        preview.stop()
         levelTimer?.invalidate()
         levelTimer = nil
         let samples = recorder.stop()
@@ -285,6 +303,7 @@ final class AppController {
         let previous = queue
         queue = Task {
             await previous?.value
+            await preview.idle()
             await job()
             pendingJobs -= 1
             updatePhase()
@@ -369,6 +388,7 @@ final class AppController {
     /// fn was combined with another key right away (fn+Delete, fn+arrow), or Esc while hands-free: drop the recording.
     private func cancel() {
         guard recording != nil, stopping == nil else { return }
+        preview.stop()
         levelTimer?.invalidate()
         levelTimer = nil
         _ = recorder.stop()

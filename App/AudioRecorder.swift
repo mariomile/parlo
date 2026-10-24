@@ -35,6 +35,11 @@ nonisolated final class SampleSink: Sendable {
 
     var level: Float { state.withLock { $0.level } }
 
+    /// The last `count` samples captured, without stopping.
+    func tail(_ count: Int) -> [Float] {
+        state.withLock { Array($0.samples.suffix(count)) }
+    }
+
     func drain() -> [Float] {
         state.withLock { s in
             defer { s = ([], 0) }
@@ -57,6 +62,9 @@ final class AudioRecorder {
 
     /// RMS of the latest buffer, 0...~1.
     var level: Float { sink.level }
+
+    /// The last `count` samples of the recording in progress, for the live preview.
+    func recentSamples(_ count: Int) -> [Float] { sink.tail(count) }
 
     /// Called when the microphone stopped mid-recording and could not be restarted.
     var onFailure: (String) -> Void = { _ in }
