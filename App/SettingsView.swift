@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $controller.settingsTab) {
             Tab("General", systemImage: "gearshape", value: .general) { GeneralTab(controller: controller) }
-            Tab("Models", systemImage: "square.and.arrow.down", value: .models) { ModelsTab(models: controller.models, cleanupModel: controller.localLLM.files) }
+            Tab("Models", systemImage: "square.and.arrow.down", value: .models) { ModelsTab(models: controller.models, cleanupModel: controller.localLLM.files, cleanupInUse: controller.settings.llm.usesLocalModel) }
             Tab("AI", systemImage: "sparkles", value: .ai) { AITab(controller: controller) }
             Tab("Styles", systemImage: "textformat", value: .styles) { StylesTab(controller: controller) }
             Tab("Dictionary", systemImage: "character.book.closed", value: .dictionary) { DictionaryTab(controller: controller) }
@@ -113,9 +113,11 @@ private struct PermissionStatus: View {
 
 // MARK: - Models
 
+/// Three questions, three sections: what Parlo uses, what else is on this Mac, what can be downloaded.
 private struct ModelsTab: View {
     let models: ModelManager
     let cleanupModel: Installable
+    let cleanupInUse: Bool
     @State private var stored: [StoredFiles] = []
     @State private var pendingDelete: StoredFiles?
     @State private var deleteError: String?
@@ -124,34 +126,65 @@ private struct ModelsTab: View {
         Set(models.states.filter { $0.value == .installed }.keys)
     }
 
+    private func isInstalled(_ id: ModelID) -> Bool { models.states[id] == .installed }
+
+    /// Measured size on disk of a downloaded voice model.
+    private func size(_ id: ModelID) -> Int64? {
+        stored.first { if case let .model(stored) = $0.kind { stored == id } else { false } }?.bytes
+    }
+
+    /// Files that aren't voice models, split by whether Parlo uses them.
+    private func files(inUse: Bool) -> [StoredFiles] {
+        stored.filter {
+            switch $0.kind {
+            // Installed models get a full row; leftovers of the rest are deletable files.
+            case let .model(id): !inUse && !isInstalled(id) && id != models.activeModelID
+            case .cleanupModel: cleanupInUse == inUse
+            case .vocabulary: (models.activeInfo.engine == .parakeet) == inUse
+            case .voiceDetection: inUse
+            case .other: !inUse
+            }
+        }
+    }
+
     var body: some View {
+        let unused = ModelCatalog.all.filter { isInstalled($0.id) && $0.id != models.activeModelID }
+        let unusedFiles = files(inUse: false)
         Form {
             Section {
-                if stored.isEmpty {
-                    Text("Nothing downloaded yet.").foregroundStyle(.secondary)
-                }
-                ForEach(stored) { item in
-                    StoredRow(item: item, active: isActive(item)) { pendingDelete = item }
+                ModelRow(models: models, info: models.activeInfo, size: size(models.activeModelID))
+                ForEach(files(inUse: true)) { item in
+                    StoredRow(item: item) { pendingDelete = item }
                 }
             } header: {
                 HStack {
-                    Text("On this Mac")
+                    Text("In use")
                     Spacer()
-                    Text("\(bytes(stored.reduce(0) { $0 + $1.bytes })) used").monospacedDigit()
+                    Text("\(bytes(stored.reduce(0) { $0 + $1.bytes })) total on this Mac").monospacedDigit()
                 }
             } footer: {
                 if let deleteError {
                     Text(deleteError).font(.caption).foregroundStyle(.red)
                 }
             }
+            if !unused.isEmpty || !unusedFiles.isEmpty {
+                Section("On this Mac, not in use") {
+                    ForEach(unused) { info in
+                        ModelRow(models: models, info: info, size: size(info.id))
+                    }
+                    ForEach(unusedFiles) { item in
+                        StoredRow(item: item) { pendingDelete = item }
+                    }
+                }
+            }
             Section {
-                ForEach(ModelCatalog.all) { info in
-                    ModelRow(models: models, info: info)
+                ForEach(ModelCatalog.all.filter { !isInstalled($0.id) && $0.id != models.activeModelID }) { info in
+                    ModelRow(models: models, info: info, size: nil)
                 }
             } header: {
-                Text("All models")
+                Text("Available to download")
             } footer: {
-                Text("Ratings come from public benchmarks (Open ASR Leaderboard, model cards) and tests on Apple Silicon. Parakeet, Cohere and Nemotron models are stored in FluidAudio's shared folder, also used by FluidVoice. Deleting one here deletes it for FluidVoice too.")
+                Text("Ratings come from public benchmarks (Open ASR Leaderboard, model cards) and tests on Apple Silicon. Parakeet, Cohere and Nemotron models live in a folder shared with FluidVoice: deleting one in Parlo deletes it for FluidVoice too.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -173,17 +206,9 @@ private struct ModelsTab: View {
         }
     }
 
-    private func isActive(_ item: StoredFiles) -> Bool {
-        if case let .model(id) = item.kind { return id == models.activeModelID }
-        return false
-    }
-
     private func deleteMessage(_ item: StoredFiles) -> String {
         switch item.kind {
-        case .model:
-            isActive(item)
-                ? "Parlo switches to Apple Speech. You can download it again from the list below."
-                : "You can download it again from the list below."
+        case .model: "Parlo doesn't use these files. You can download the model again anytime."
         case .cleanupModel: "AI cleanup with \(CleanupModel.displayName) stops working until you download it again in AI."
         case .vocabulary: "It downloads again the next time you dictate with Parakeet and have dictionary words."
         case .voiceDetection: "It downloads again on the next dictation."
@@ -193,14 +218,12 @@ private struct ModelsTab: View {
 
     private func delete(_ item: StoredFiles) {
         Task {
-            // A failure shows on the model's own row; the files are then removed below regardless.
-            if case let .model(id) = item.kind { try? await models.delete(id) }
+            // A failure shows in AI; the files are then removed below regardless.
             if case .cleanupModel = item.kind { try? await cleanupModel.delete() }
             do {
                 try ModelStorage.delete(item)
                 deleteError = nil
-                // With the files gone this succeeds, so a model whose own delete failed above is cleared too.
-                if case let .model(id) = item.kind { try? await models.delete(id) }
+                // With the files gone this succeeds, so a delete that failed above is cleared too.
                 if case .cleanupModel = item.kind { try? await cleanupModel.delete() }
             } catch {
                 deleteError = "Couldn't delete \(item.name): \(error.localizedDescription)"
@@ -218,18 +241,17 @@ private func bytes(_ count: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
 }
 
-/// One downloaded folder: what it is, its size on disk, and a delete button.
+/// Downloaded files that aren't a voice model: what they are, their size on disk, and a delete button.
 private struct StoredRow: View {
     let item: StoredFiles
-    let active: Bool
     let onDelete: () -> Void
 
     private var detail: String {
         switch item.kind {
-        case .model: active ? "Voice model, in use" : "Voice model"
-        case .cleanupModel: "AI cleanup model"
-        case .vocabulary: "Recognises your dictionary words with Parakeet"
-        case .voiceDetection: "Needed for every dictation"
+        case .model: "Part of a voice model that isn't installed. May belong to FluidVoice."
+        case .cleanupModel: "AI cleanup and command mode, on this Mac"
+        case .vocabulary: "Recognises your dictionary words with Parakeet. Downloaded automatically."
+        case .voiceDetection: "Needed for every dictation. Downloaded automatically."
         case .other: "Not used by Parlo. May belong to FluidVoice or an old download."
         }
     }
@@ -256,25 +278,20 @@ private struct StoredRow: View {
 private struct ModelRow: View {
     let models: ModelManager
     let info: ModelInfo
+    /// Measured on disk once downloaded; the catalog estimate before.
+    let size: Int64?
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(info.displayName).fontWeight(.medium)
-                    if models.activeModelID == info.id {
-                        Text("Active").font(.caption2.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(.tint.opacity(0.2), in: Capsule())
-                    }
-                }
+                Text(info.displayName).fontWeight(.medium)
                 HStack(spacing: 12) {
                     Rating(label: "Italian", value: info.italian)
                     Rating(label: "English", value: info.english)
                     Rating(label: "Speed", value: info.speed)
                 }
                 .padding(.vertical, 2)
-                Text("\(info.sizeLabel) · \(info.languages)").font(.caption).foregroundStyle(.secondary)
+                Text("\(size.map(bytes) ?? info.sizeLabel) · \(info.languages)").font(.caption).foregroundStyle(.secondary)
                 if !info.note.isEmpty { Text(info.note).font(.caption).foregroundStyle(.secondary) }
                 if case let .failed(message) = models.states[info.id] {
                     Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
@@ -316,6 +333,7 @@ private struct Rating: View {
 struct ModelActions: View {
     let models: ModelManager
     let id: ModelID
+    @State private var confirmDelete = false
 
     var body: some View {
         let needsDownload = ModelCatalog.info(id).needsDownload
@@ -332,12 +350,19 @@ struct ModelActions: View {
             case .installed:
                 if models.activeModelID != id { Button("Use") { models.select(id) } }
                 if needsDownload {
-                    Button(role: .destructive) { Task { try? await models.delete(id) } } label: {
+                    Button(role: .destructive) { confirmDelete = true } label: {
                         Image(systemName: "trash")
                     }
                     .help("Delete model files")
                 }
             }
+        }
+        .confirmationDialog("Delete \(ModelCatalog.info(id).displayName)?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) { Task { try? await models.delete(id) } }
+        } message: {
+            Text(models.activeModelID == id
+                ? "Parlo switches to Apple Speech. You can download it again anytime."
+                : "You can download it again anytime.")
         }
     }
 }
