@@ -15,6 +15,8 @@ final class HUDModel {
     /// Recent input levels, newest last, for the waveform.
     var levels: [Float] = Array(repeating: 0, count: 12)
     var startedAt = Date()
+    /// Recording continues without holding fn (double tap).
+    var handsFree = false
     var notch = NotchGeometry.fallback
 
     func pushLevel(_ level: Float) {
@@ -79,6 +81,7 @@ final class HUDController {
         if case .recording = state {
             model.levels = Array(repeating: 0, count: model.levels.count)
             model.startedAt = .now
+            model.handsFree = false
         }
         if panel.isVisible {
             model.state = state
@@ -169,6 +172,7 @@ struct IslandView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .foregroundStyle(.white)
         .animation(reduceMotion ? .easeOut(duration: 0.15) : Island.spring, value: model.state)
+        .animation(reduceMotion ? .easeOut(duration: 0.15) : Island.spring, value: model.handsFree)
     }
 
     // Wings sit left and right of the camera; nothing is drawn where the notch hides it.
@@ -213,6 +217,12 @@ struct IslandView: View {
                         .foregroundStyle(LinearGradient(colors: Island.command, startPoint: .leading, endPoint: .trailing))
                 } else {
                     RecordingDot()
+                }
+                if model.handsFree {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
                 Elapsed(since: model.startedAt)
             }
