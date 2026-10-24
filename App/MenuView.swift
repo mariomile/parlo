@@ -108,7 +108,8 @@ struct MenuView: View {
     private var meetingRow: some View {
         Row(
             icon: "person.2.wave.2", tint: .red, title: "Meeting",
-            subtitle: controller.meetings.isRecording ? "Recording you and the call" : "Transcript and notes of a call"
+            subtitle: controller.meetings.problem
+                ?? (controller.meetings.isRecording ? "Recording you and the call" : "Transcript and notes of a call")
         ) {
             HStack(spacing: 8) {
                 if controller.meetings.isRecording {

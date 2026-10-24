@@ -18,6 +18,8 @@ public struct MeetingNotes: Sendable {
     public struct Result: Equatable, Sendable {
         public let title: String?
         public let notes: String
+        /// False when the model couldn't shorten a long meeting enough: the notes then cover only its start.
+        public internal(set) var coversWholeMeeting = true
     }
 
     /// `lines`: the transcript, one turn per line.
@@ -33,7 +35,7 @@ public struct MeetingNotes: Sendable {
         var points: [String] = []
         for (i, part) in parts.enumerated() {
             try Task.checkCancellation()
-            points.append(try await ask(Self.extractPrompt, "Part \(i + 1) of \(parts.count).\n\n" + part))
+            points.append(try await ask(Self.extractPrompt, Self.partLabel(i + 1, of: parts.count) + part))
         }
         // Merging must shrink the points, or a model that only repeats them would loop forever.
         while true {
@@ -41,10 +43,14 @@ public struct MeetingNotes: Sendable {
             if groups.count == 1 { break }
             var merged: [String] = []
             for group in groups { merged.append(try await ask(Self.mergePrompt, group)) }
-            guard merged.joined().count < points.joined().count else { break }
+            guard Self.size(merged.joined()) < Self.size(points.joined()) else { break }
             points = merged
         }
-        return Self.parse(try await ask(Self.finalPrompt, header + Self.pointsIntro + points.joined(separator: "\n")))
+        // When the model wouldn't shrink them, only the points that fit go into the last request.
+        let groups = Self.chunks(points, maxCharacters: budget)
+        var result = Self.parse(try await ask(Self.finalPrompt, header + Self.pointsIntro + groups[0]))
+        result.coversWholeMeeting = groups.count == 1
+        return result
     }
 
     static func header(_ duration: Double) -> String {
@@ -54,9 +60,21 @@ public struct MeetingNotes: Sendable {
     static let transcriptIntro = "\n\nTranscript:\n"
     static let pointsIntro = "\n\nPoints from each part of the meeting:\n"
 
+    static func partLabel(_ part: Int, of count: Int) -> String { "Part \(part) of \(count).\n\n" }
+
     /// What every request carries besides the meeting's own text, at most.
     static func overhead(_ duration: Double) -> Int {
-        header(duration).count + max(transcriptIntro.count, pointsIntro.count)
+        header(duration).count + max(transcriptIntro.count, pointsIntro.count, partLabel(9999, of: 9999).count)
+    }
+
+    /// Roughly what text costs a model, in characters: scripts written without spaces (Chinese, Japanese, Korean)
+    /// spend about a token per character, three or four times what a Latin character does.
+    static func size(_ text: some StringProtocol) -> Int {
+        text.reduce(0) { total, character in
+            let value = character.unicodeScalars.first?.value ?? 0
+            let wide = (0x2E80..<0xD7B0).contains(value) || (0xF900..<0xFB00).contains(value) || (0xFF00..<0xFFF0).contains(value)
+            return total + (wide ? 3 : 1)
+        }
     }
 
     private func ask(_ system: String, _ user: String) async throws -> String {
@@ -65,40 +83,52 @@ public struct MeetingNotes: Sendable {
 
     // MARK: - Pieces
 
-    /// Lines joined into texts of at most `maxCharacters`. A line longer than that is cut at word breaks.
+    /// Lines joined into texts of at most `maxCharacters`, counted by `size`. A line longer than that is cut at
+    /// word breaks, and a word longer than that between characters.
     static func chunks(_ lines: [String], maxCharacters: Int) -> [String] {
+        joined(lines.flatMap { size($0) <= maxCharacters ? [$0] : pieces($0, maxCharacters) }, "\n", maxCharacters)
+    }
+
+    private static func pieces(_ line: String, _ maxCharacters: Int) -> [String] {
+        let words = line.split(separator: " ").flatMap { word in
+            size(word) <= maxCharacters ? [String(word)] : joined(word.map(String.init), "", maxCharacters)
+        }
+        return joined(words, " ", maxCharacters)
+    }
+
+    /// Consecutive items joined while the result stays within `maxCharacters`.
+    private static func joined(_ items: [String], _ separator: String, _ maxCharacters: Int) -> [String] {
         var out: [String] = []
         var current = ""
-        func add(_ line: String) {
-            if !current.isEmpty, current.count + 1 + line.count > maxCharacters {
+        var currentSize = 0
+        for item in items {
+            let itemSize = size(item)
+            if !current.isEmpty, currentSize + separator.count + itemSize > maxCharacters {
                 out.append(current)
                 current = ""
+                currentSize = 0
             }
-            current += current.isEmpty ? line : "\n" + line
-        }
-        for line in lines {
-            if line.count <= maxCharacters { add(line); continue }
-            var piece = ""
-            for word in line.split(separator: " ") {
-                if !piece.isEmpty, piece.count + 1 + word.count > maxCharacters {
-                    add(piece)
-                    piece = ""
-                }
-                piece += piece.isEmpty ? String(word) : " " + word
+            if current.isEmpty {
+                current = item
+                currentSize = itemSize
+            } else {
+                current += separator + item
+                currentSize += separator.count + itemSize
             }
-            if !piece.isEmpty { add(piece) }
         }
         if !current.isEmpty { out.append(current) }
         return out
     }
 
-    /// Splits a "Title: …" first line off the notes and drops a code fence around them.
+    /// Splits a title line off the notes and drops a code fence around them.
     static func parse(_ response: String) -> Result {
         var lines = response.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
         if lines.first?.hasPrefix("```") == true { lines.removeFirst() }
         if lines.last?.hasPrefix("```") == true { lines.removeLast() }
         var title: String?
-        if let first = lines.first, let range = first.range(of: "title:", options: [.caseInsensitive, .anchored]) {
+        // "Title: X", also as "**Title:** X" or "# Title: X".
+        if let first = lines.first?.drop(while: { "#* ".contains($0) }),
+           let range = first.range(of: "title:", options: [.caseInsensitive, .anchored]) {
             let value = first[range.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: " *#\"").union(.whitespaces))
             title = value.isEmpty ? nil : value
             lines.removeFirst()

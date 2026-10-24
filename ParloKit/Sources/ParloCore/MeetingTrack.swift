@@ -42,7 +42,11 @@ public final class TrackWriter: AudioSink {
             let gap = expectedStart - s.written
             do {
                 if gap > Self.gapTolerance {
-                    try Self.write([Float](repeating: 0, count: gap), to: file)
+                    // A second at a time: a long stall must not allocate its whole length on the audio thread.
+                    let second = [Float](repeating: 0, count: Audio.sampleRate)
+                    for start in stride(from: 0, to: gap, by: second.count) {
+                        try Self.write(Array(second.prefix(gap - start)), to: file)
+                    }
                     s.written += gap
                 }
                 try Self.write(chunk, to: file)
@@ -84,13 +88,12 @@ public protocol SpeechSegmenting: Sendable {
 /// and its place in the recording becomes the turn's time.
 public struct MeetingTrackTranscriber: Sendable {
     let transcriber: any Transcriber
-    /// Without one, the track is cut every 30 s or so at its quietest moments.
-    let segmenter: (any SpeechSegmenting)?
+    let segmenter: any SpeechSegmenting
     let languageCode: String?
     let dictionary: [DictionaryEntry]
 
     public init(
-        transcriber: any Transcriber, segmenter: (any SpeechSegmenting)?, languageCode: String?, dictionary: [DictionaryEntry]
+        transcriber: any Transcriber, segmenter: any SpeechSegmenting, languageCode: String?, dictionary: [DictionaryEntry]
     ) {
         self.transcriber = transcriber
         self.segmenter = segmenter
@@ -109,7 +112,7 @@ public struct MeetingTrackTranscriber: Sendable {
             onProgress(1)
             return []
         }
-        let found = try await segmenter?.speechRanges(samples) ?? AudioChunker.ranges(samples, maxSeconds: 30)
+        let found = try await segmenter.speechRanges(samples)
         let ranges = Self.split(found, at: cuts.map(Audio.sampleCount))
         var turns: [MeetingTurn] = []
         var firstError: (any Error)?

@@ -16,13 +16,21 @@ struct MeetingsView: View {
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 240)
             .safeAreaInset(edge: .bottom) { recordButton.padding(10) }
+            .safeAreaInset(edge: .top) {
+                if let error = meetings.store.saveError {
+                    Label("Changes couldn't be saved: \(error)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                }
+            }
         } detail: {
             if let id = selection ?? meetings.meetings.first?.id, let meeting = meetings.store.meeting(id) {
                 MeetingDetail(meeting: meeting, controller: meetings)
             } else {
                 ContentUnavailableView(
                     "No meetings yet", systemImage: "person.2.wave.2",
-                    description: Text("Start one when a call begins. Parlo records your microphone and what the Mac plays, then writes the notes on this Mac.")
+                    description: Text("Start one when a call begins. Parlo records your microphone and what the Mac plays, transcribes both on this Mac, then writes the notes with the model chosen in Settings → AI.")
                 )
             }
         }
@@ -146,12 +154,12 @@ private struct MeetingDetail: View {
         }
         if meeting.othersSilent, meeting.status == .done {
             banner(
-                "Nothing came from the Mac's audio, so only your side is here. Allow Parlo in System Settings → Privacy & Security → Screen & System Audio Recording, under System Audio Recording Only.",
+                "Nothing came from the Mac's audio, so only your side is here. If the call had sound, allow Parlo in System Settings → Privacy & Security → Screen & System Audio Recording, under System Audio Recording Only.",
                 "speaker.slash.fill", .orange
             )
         }
         if let error = meeting.notesError {
-            banner("No notes: \(error)", "sparkles", .orange)
+            banner(meeting.notes == nil ? "No notes: \(error)" : error, "sparkles", .orange)
         }
     }
 

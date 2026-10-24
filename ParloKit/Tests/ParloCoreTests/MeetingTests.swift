@@ -76,6 +76,17 @@ import Testing
         #expect(result.title == "Launch plan")
         #expect(result.notes == "## Summary\n- Ship")
         #expect(MeetingNotes.parse("## Summary\n- Ship").title == nil)
+        #expect(MeetingNotes.parse("**Title:** Launch plan\n## Summary").title == "Launch plan")
+        #expect(MeetingNotes.parse("# Title: Launch plan\n## Summary") == .init(title: "Launch plan", notes: "## Summary"))
+    }
+
+    @Test func wideScriptsCountForMore() {
+        // A CJK character is about a token, a Latin one about a quarter of one.
+        #expect(MeetingNotes.size("会议") == 6)
+        #expect(MeetingNotes.size("ok") == 2)
+        let chunks = MeetingNotes.chunks(["会议会议", "会议"], maxCharacters: 12)
+        #expect(chunks == ["会议会议", "会议"])
+        #expect(MeetingNotes.chunks(["会议会议会议"], maxCharacters: 6) == ["会议", "会议", "会议"])
     }
 
     @Test func shortMeetingIsOneRequest() async throws {
@@ -98,6 +109,7 @@ import Testing
         let limit = MeetingNotes.overhead(600) + 110
         let result = try await MeetingNotes(llm: llm, maxCharacters: limit).write(lines, duration: 600)
         #expect(result.title == "Long")
+        #expect(result.coversWholeMeeting)
         let systems = llm.calls.map(\.system)
         #expect(systems.filter { $0 == MeetingNotes.extractPrompt }.count == 5)
         #expect(systems.last == MeetingNotes.finalPrompt)
@@ -111,7 +123,9 @@ import Testing
         let lines = (0..<4).map { _ in String(repeating: "z", count: 90) }
         let result = try await MeetingNotes(llm: llm, maxCharacters: MeetingNotes.overhead(60) + 100).write(lines, duration: 60)
         #expect(result.notes == "## Summary\n- x")
+        #expect(!result.coversWholeMeeting)
         #expect(llm.calls.count < 20)
+        #expect(llm.calls.allSatisfy { $0.user.count <= MeetingNotes.overhead(60) + 100 })
     }
 }
 
@@ -256,7 +270,7 @@ import Testing
 
     @Test func silentTrackHasNoTurns() async throws {
         let track = MeetingTrackTranscriber(
-            transcriber: ScriptedTranscriber([]), segmenter: nil, languageCode: nil, dictionary: []
+            transcriber: ScriptedTranscriber([]), segmenter: Segmenter(ranges: []), languageCode: nil, dictionary: []
         )
         #expect(try await track.turns([Float](repeating: 0, count: 32_000), speaker: .them) { _ in }.isEmpty)
     }

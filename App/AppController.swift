@@ -549,11 +549,14 @@ final class AppController {
         }
     }
 
-    /// Notes use the AI provider chosen for cleanup even when cleanup is off: they are what a meeting is for.
+    /// Notes are what a meeting is for, so a model on this Mac writes them even with cleanup off. A hosted provider
+    /// only gets the transcript while cleanup is on: turning cleanup off keeps every word on this Mac.
     private var meetingContext: MeetingController.Context {
         var llm = settings.llm
-        llm.enabled = true
-        let problem = llm.problem(apiKey: apiKey, local: localLLM)
+        if llm.runsOnThisMac { llm.enabled = true }
+        let problem = llm.enabled
+            ? llm.problem(apiKey: apiKey, local: localLLM)
+            : "Notes need AI cleanup on, or a model that runs on this Mac (Settings → AI)"
         // Characters per request: Apple's on-device model reads about 4k tokens, an MLX model on this Mac
         // stays quick to about 12k characters, a hosted model reads far more.
         let limit = switch llm.provider {
@@ -561,10 +564,17 @@ final class AppController {
         case .local: 12000
         case .openAICompatible: 48000
         }
+        var writeNotes: (([String], Double) async throws -> MeetingNotes.Result)?
+        if problem == nil {
+            let notes = MeetingNotes(llm: llm.providerClient(apiKey: apiKey, local: localLLM), maxCharacters: limit)
+            let localLLM = localLLM
+            // A long meeting is several requests: the local model stays loaded for all of them, not reloaded for each.
+            writeNotes = llm.provider == .local
+                ? { lines, duration in try await localLLM.keepLoaded { try await notes.write(lines, duration: duration) } }
+                : { lines, duration in try await notes.write(lines, duration: duration) }
+        }
         return MeetingController.Context(
-            languageCode: settings.languageCode, dictionary: settings.dictionary, segmenter: speechDetector,
-            notes: problem == nil ? MeetingNotes(llm: llm.providerClient(apiKey: apiKey, local: localLLM), maxCharacters: limit) : nil,
-            notesProblem: problem
+            languageCode: settings.languageCode, dictionary: settings.dictionary, writeNotes: writeNotes, notesProblem: problem
         )
     }
 

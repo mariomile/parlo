@@ -32,8 +32,16 @@ extension LLMSettings {
         }
     }
 
+    /// Whether text sent to the provider stays on this Mac.
+    public var runsOnThisMac: Bool {
+        switch provider {
+        case .apple, .local: true
+        case .openAICompatible: isOnThisMac
+        }
+    }
+
     /// A server on this Mac (Ollama, LM Studio) needs no key.
     private var isOnThisMac: Bool {
-        ["localhost", "127.0.0.1"].contains(URL(string: baseURL)?.host() ?? "")
+        ["localhost", "127.0.0.1", "::1"].contains(URL(string: baseURL)?.host() ?? "")
     }
 }

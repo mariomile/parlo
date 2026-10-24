@@ -16,11 +16,22 @@ enum SystemAudioError: LocalizedError {
 /// A Core Audio process tap feeds a private aggregate device built on the current output. The first start
 /// asks for System Audio Recording; when it's denied the buffers are silent and nothing reports an error.
 final class SystemAudioTap {
+    /// What Core Audio's listeners point to. It holds the tap weakly, so a late notification finds nothing.
+    private final class Listener {
+        weak var tap: SystemAudioTap?
+        init(_ tap: SystemAudioTap) { self.tap = tap }
+    }
+
     private let sink: any AudioSink
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProc: AudioDeviceIOProcID?
-    private var outputListener: AudioObjectPropertyListenerBlock?
+    /// The tap's format the capture was built for; set once its listener is on.
+    private var builtFormat: AudioStreamBasicDescription?
+    /// Set while capturing.
+    private var listener: Unmanaged<Listener>?
+    /// Bumped on every rebuild, so a retry scheduled for an older one does nothing.
+    private var generation = 0
     private let queue = DispatchQueue(label: "parlo.system-audio", qos: .userInitiated)
 
     /// Called when the capture stopped and could not be rebuilt.
@@ -31,32 +42,69 @@ final class SystemAudioTap {
     }
 
     func start() throws {
-        try build()
+        let listener = Unmanaged.passRetained(Listener(self))
+        self.listener = listener
         // Headphones plugged in or AirPods connected move the output, and the tap with it.
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.rebuild() } }
-        }
         var address = Self.defaultOutputAddress
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, nil, listener)
-        outputListener = listener
+        AudioObjectAddPropertyListener(AudioObjectID(kAudioObjectSystemObject), &address, Self.changed, listener.toOpaque())
+        do { try build() } catch {
+            stop()
+            throw error
+        }
     }
 
     func stop() {
-        if let outputListener {
-            var address = Self.defaultOutputAddress
-            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, nil, outputListener)
-        }
-        outputListener = nil
-        teardown()
+        guard let listener else { return teardown() }
+        self.listener = nil
+        generation += 1
+        var address = Self.defaultOutputAddress
+        AudioObjectRemovePropertyListener(AudioObjectID(kAudioObjectSystemObject), &address, Self.changed, listener.toOpaque())
+        teardown(listener)
+        // A notification already on its way to the main queue still finds the object, with no tap in it.
+        DispatchQueue.main.async { listener.release() }
     }
 
-    private func rebuild() {
-        guard outputListener != nil else { return }
-        teardown()
+    /// Right after an output switch the new device often refuses to be used for a moment: a few tries, as the
+    /// microphone does.
+    private func rebuild(attempt: Int = 1) {
+        guard let listener else { return }
+        if attempt == 1 { generation += 1 }
+        teardown(listener)
         do { try build() } catch {
-            stop()
-            onFailure(error.localizedDescription)
+            guard attempt < 5 else {
+                stop()
+                return onFailure(error.localizedDescription)
+            }
+            let scheduled = generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.generation == scheduled else { return }
+                    self.rebuild(attempt: attempt + 1)
+                }
+            }
         }
+    }
+
+    /// The tap reports its format when it attaches and starts too: only a real change is worth a rebuild.
+    private func formatChanged() {
+        guard let built = builtFormat, let now = tapFormat(),
+              now.mSampleRate != built.mSampleRate || now.mChannelsPerFrame != built.mChannelsPerFrame
+        else { return }
+        rebuild()
+    }
+
+    private nonisolated static let changed: AudioObjectPropertyListenerProc = { _, _, _, context in
+        guard let context else { return noErr }
+        let listener = Unmanaged<Listener>.fromOpaque(context).takeUnretainedValue()
+        DispatchQueue.main.async { MainActor.assumeIsolated { listener.tap?.rebuild() } }
+        return noErr
+    }
+
+    private nonisolated static let formatChangedProc: AudioObjectPropertyListenerProc = { _, _, _, context in
+        guard let context else { return noErr }
+        let listener = Unmanaged<Listener>.fromOpaque(context).takeUnretainedValue()
+        DispatchQueue.main.async { MainActor.assumeIsolated { listener.tap?.formatChanged() } }
+        return noErr
     }
 
     private func build() throws {
@@ -67,7 +115,7 @@ final class SystemAudioTap {
         try check("tap", AudioHardwareCreateProcessTap(description, &tapID))
 
         guard let outputUID = Self.defaultOutputUID else {
-            teardown()
+            teardown(listener)
             throw SystemAudioError.failed("no output device", kAudioHardwareBadDeviceError)
         }
         let aggregate: [String: Any] = [
@@ -84,30 +132,46 @@ final class SystemAudioTap {
         ]
         try check("device", AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID))
 
-        var stream = AudioStreamBasicDescription()
-        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioTapPropertyFormat, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
-        )
-        try check("format", AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &stream))
+        guard var stream = tapFormat() else {
+            teardown(listener)
+            throw SystemAudioError.failed("format", kAudioHardwareUnspecifiedError)
+        }
         guard let format = AVAudioFormat(streamDescription: &stream),
               let converter = AVAudioConverter(from: format, to: Audio.format)
         else {
-            teardown()
+            teardown(listener)
             throw SystemAudioError.failed("format", kAudioHardwareUnsupportedOperationError)
         }
         let block = Self.makeIOBlock(format: format, converter: converter, sink: sink)
         try check("reader", AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregateID, queue, block))
         try check("start", AudioDeviceStart(aggregateID, ioProc))
+        // The output's sample rate can change under the same device: AirPods switching to their headset profile.
+        if let listener {
+            var address = Self.tapFormatAddress
+            AudioObjectAddPropertyListener(tapID, &address, Self.formatChangedProc, listener.toOpaque())
+            builtFormat = stream
+        }
+    }
+
+    private func tapFormat() -> AudioStreamBasicDescription? {
+        var stream = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        var address = Self.tapFormatAddress
+        return AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &stream) == noErr ? stream : nil
     }
 
     private func check(_ step: String, _ status: OSStatus) throws {
         guard status != noErr else { return }
-        teardown()
+        teardown(listener)
         throw SystemAudioError.failed(step, status)
     }
 
-    private func teardown() {
+    private func teardown(_ listener: Unmanaged<Listener>? = nil) {
+        if builtFormat != nil, let listener {
+            var address = Self.tapFormatAddress
+            AudioObjectRemovePropertyListener(tapID, &address, Self.formatChangedProc, listener.toOpaque())
+        }
+        builtFormat = nil
         if aggregateID != kAudioObjectUnknown {
             if let ioProc {
                 AudioDeviceStop(aggregateID, ioProc)
@@ -127,8 +191,17 @@ final class SystemAudioTap {
     ) -> AudioDeviceIOBlock {
         let ratio = Audio.format.sampleRate / format.sampleRate
         return { _, input, _, _, _ in
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: input, deallocator: nil),
-                  buffer.frameLength > 0,
+            // An output with a microphone of its own (a headset, an audio interface) brings its input stream into
+            // the aggregate ahead of the tap's: the tap is the last buffer.
+            guard let tap = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)).last,
+                  let samples = tap.mData, tap.mDataByteSize > 0
+            else { return }
+            let frames = AVAudioFrameCount(tap.mDataByteSize / format.streamDescription.pointee.mBytesPerFrame)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames), let channel = buffer.floatChannelData
+            else { return }
+            buffer.frameLength = frames
+            channel[0].update(from: samples.assumingMemoryBound(to: Float.self), count: Int(frames))
+            guard frames > 0,
                   let out = AVAudioPCMBuffer(pcmFormat: Audio.format, frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32)
             else { return }
             var supplied = false
@@ -146,6 +219,10 @@ final class SystemAudioTap {
             sink.append(Array(UnsafeBufferPointer(start: data[0], count: Int(out.frameLength))))
         }
     }
+
+    private static let tapFormatAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioTapPropertyFormat, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
+    )
 
     private static let defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal,

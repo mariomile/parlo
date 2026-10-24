@@ -15,6 +15,10 @@ public final class LocalLLM {
         didSet { if inUse != oldValue { sync() } }
     }
 
+    /// Work running with the model held in memory even when cleanup doesn't use it, such as meeting notes.
+    private var holds = 0
+    private var keepsLoaded: Bool { inUse || holds > 0 }
+
     let directory: URL
     private let loaded = SharedLoad<URL, ModelContainer>()
 
@@ -40,8 +44,19 @@ public final class LocalLLM {
         guard HubSnapshot.isInstalled(directory) else { throw LocalLLMError.notInstalled }
         let directory = directory
         // A one-off call (the connection test) doesn't keep the model in memory.
-        guard inUse else { return try await Self.load(directory) }
+        guard keepsLoaded else { return try await Self.load(directory) }
         return try await loaded.value(directory) { try await Self.load(directory) }
+    }
+
+    /// Runs `work` with the model loaded once for all its requests, then frees it unless cleanup uses it.
+    public func keepLoaded<T: Sendable>(during work: () async throws -> T) async throws -> T {
+        holds += 1
+        sync()
+        defer {
+            holds -= 1
+            sync()
+        }
+        return try await work()
     }
 
     /// Frees the memory the model holds, about its size on disk.
@@ -52,7 +67,7 @@ public final class LocalLLM {
 
     /// Loads the model in the background so the first cleanup is fast, or frees it when cleanup stops using it.
     private func sync() {
-        guard inUse, files.state == .installed else {
+        guard keepsLoaded, files.state == .installed else {
             if !loaded.isEmpty { unload() }
             return
         }

@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Quit from the menu, Cmd+Q, logout or a system update: the dictation in progress is kept for Retry,
-    /// the meeting in progress to process on the next launch.
+    /// the meeting in progress to process again with ↻.
     func applicationWillTerminate(_ notification: Notification) {
         controller.finishRecording()
         controller.meetings.terminate()
