@@ -16,7 +16,7 @@ enum RecorderError: LocalizedError {
 }
 
 /// Thread-safe sample accumulator written from the audio thread.
-nonisolated final class SampleSink: Sendable {
+nonisolated final class SampleSink: AudioSink {
     private let state = Mutex<(samples: [Float], level: Float)>(([], 0))
 
     func reset() {
@@ -49,45 +49,40 @@ nonisolated final class SampleSink: Sendable {
     }
 }
 
-/// Captures the microphone as 16 kHz mono Float32, the format every engine expects.
+/// Captures the microphone as 16 kHz mono Float32, the format every engine expects, into `sink`.
 final class AudioRecorder {
     nonisolated static let targetFormat = Audio.format
 
     private var engine: AVAudioEngine?
     private var deviceUID: String?
     private var configObserver: NSObjectProtocol?
-    private let sink = SampleSink()
+    private let sink: any AudioSink
     private var isRecording = false
     /// Bumped by every start and stop, so a restart scheduled for an earlier recording does nothing.
     private var generation = 0
     /// The chosen microphone couldn't be used at some point of this recording, so the system default was.
     private(set) var usedFallback = false
 
-    /// RMS of the latest buffer, 0...~1.
-    var level: Float { sink.level }
-
-    /// The last `count` samples of the recording in progress, for the live preview.
-    func recentSamples(_ count: Int) -> [Float] { sink.tail(count) }
-
     /// Called when the microphone stopped mid-recording and could not be restarted.
     var onFailure: (String) -> Void = { _ in }
 
+    init(sink: any AudioSink) {
+        self.sink = sink
+    }
+
     func start(deviceUID: String?) throws {
-        _ = stop()
+        stop()
         generation += 1
-        sink.reset()
         usedFallback = false
         self.deviceUID = deviceUID
         try startEngine()
         isRecording = true
     }
 
-    /// Stops capture and returns everything recorded since `start`, even if the engine already died.
-    func stop() -> [Float] {
+    func stop() {
         isRecording = false
         generation += 1
         if let engine { teardown(engine) }
-        return sink.drain()
     }
 
     /// Builds a fresh engine that appends to the current recording.
@@ -150,7 +145,7 @@ final class AudioRecorder {
     }
 
     /// Built outside the main actor: the tap runs on the audio thread.
-    private nonisolated static func makeTap(converter: AVAudioConverter, ratio: Double, sink: SampleSink) -> AVAudioNodeTapBlock {
+    private nonisolated static func makeTap(converter: AVAudioConverter, ratio: Double, sink: any AudioSink) -> AVAudioNodeTapBlock {
         return { buffer, _ in
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
             guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }

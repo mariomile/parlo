@@ -29,8 +29,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Parlo records what your Mac plays during a meeting you start, so the notes include the other people on the call.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Parlo records your voice while you hold the dictation key, and transcribes it on this Mac.</string>
+	<string>Parlo records your voice while you hold the dictation key or record a meeting, and transcribes it on this Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Parlo can use Apple's on-device speech recognition to transcribe your dictation.</string>
 </dict>

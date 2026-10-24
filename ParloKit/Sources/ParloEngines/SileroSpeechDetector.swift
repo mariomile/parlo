@@ -15,3 +15,13 @@ public struct SileroSpeechDetector: SpeechDetector {
         try await !manager.segmentSpeech(samples).isEmpty
     }
 }
+
+
+extension SileroSpeechDetector: SpeechSegmenting {
+    /// Stretches of speech, cut at pauses and never longer than 14 s, which every engine takes in one go.
+    public func speechRanges(_ samples: [Float]) async throws -> [Range<Int>] {
+        try await manager.segmentSpeech(samples).map {
+            $0.startSample(sampleRate: Audio.sampleRate)..<$0.endSample(sampleRate: Audio.sampleRate)
+        }
+    }
+}

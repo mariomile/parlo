@@ -58,13 +58,17 @@ Settings → Models: download, cancel, delete, and pick the active one.
 
 Settings → AI (or **AI Cleanup** in the menu bar): turn it on and pick a provider. **Apple Intelligence** is the default: it runs on the Mac with no key, once Apple Intelligence is on in System Settings and its model has finished downloading. For a cloud or Ollama provider, pick a preset (or a custom OpenAI-compatible URL), set the model and API key, then **Test connection**. The key is stored in the macOS keychain. If the AI call fails or times out (5 s), Parlo pastes the raw transcript and says so: a dictation is never lost.
 
+## Meetings
+
+**Meeting → Start** in the menu bar records your microphone as "Me" and what the Mac plays (the call) as "Them". **Stop** transcribes both on this Mac and writes notes with the AI provider set in Settings → AI: a title, a summary, decisions and action items. **Meeting → ☰** opens every meeting, where you can copy or export it as Markdown. The first meeting asks for System Audio Recording; if it's denied, only your side is transcribed, and the meeting says so.
+
 ## Pasting
 
 Parlo pastes with ⌘V and then puts your clipboard back. When nothing that takes text has focus (the desktop, a button, a list), it copies the text instead and says "press ⌘V". A transcription that hangs is stopped after 30 s plus the length of the recording, and the audio stays in Recent for Retry.
 
 ## Data
 
-Settings, styles, dictionary and snippets: `~/Library/Application Support/Parlo/settings.json`. History: `~/Library/Application Support/Parlo/History`. Nothing leaves the Mac except the text sent to the AI provider you configure.
+Settings, styles, dictionary and snippets: `~/Library/Application Support/Parlo/settings.json`. History: `~/Library/Application Support/Parlo/History`. Meetings: `~/Library/Application Support/Parlo/Meetings`. Nothing leaves the Mac except the text sent to the AI provider you configure.
 
 ## Tests
 
