@@ -23,9 +23,11 @@ final class AppController {
         }
     }
     private(set) var phase: Phase = .idle
-    /// Newest first, as kept on disk.
+    /// Every kept entry, newest first, as on disk.
     private(set) var recent: [HistoryEntry] = []
     private(set) var hotkeyActive = false
+    /// Progress (0 to 1) of audio files being transcribed, by history entry id. Absent while queued.
+    private(set) var fileProgress: [String: Double] = [:]
     var settingsTab: SettingsTab = .general
     let models: ModelManager
 
@@ -54,6 +56,8 @@ final class AppController {
     private var tapRetryTimer: Timer?
     private var onboardingWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var historyWindow: NSWindow?
+    private let previousApp = PreviousAppTracker()
     /// Loaded at launch; until it is, recordings go straight to the transcriber.
     private var speechDetector: SileroSpeechDetector?
 
@@ -130,6 +134,29 @@ final class AppController {
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func delete(_ entry: HistoryEntry) {
+        history.delete(entry.id)
+        recent = history.entries()
+    }
+
+    /// Hides the History window, brings back the app that was in front before it, and pastes there.
+    func paste(_ entry: HistoryEntry) {
+        guard let text = entry.text else { return }
+        guard Permissions.accessibility, let app = previousApp.app, !app.isTerminated else {
+            copy(text)
+            show(.message("Copied: press ⌘V to paste", isError: false))
+            return
+        }
+        historyWindow?.orderOut(nil)
+        app.activate(from: .current, options: [])
+        Task {
+            for _ in 0..<25 where NSWorkspace.shared.frontmostApplication != app {
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+            await TextInserter.insert(text)
+        }
     }
 
     // MARK: - Dictation flow
@@ -326,6 +353,49 @@ final class AppController {
         }
     }
 
+    /// Transcribes an audio file with the active model and adds the result to History. Runs in the same queue as dictations.
+    func transcribeFile(_ url: URL) {
+        let entry: HistoryEntry
+        do {
+            entry = try history.addFile(name: url.lastPathComponent, duration: AudioFileDecoder.duration(of: url))
+        } catch {
+            show(.message(error.localizedDescription, isError: true))
+            return
+        }
+        recent = history.entries()
+        enqueue { [weak self] in await self?.processFile(url, entry) }
+    }
+
+    private func processFile(_ url: URL, _ entry: HistoryEntry) async {
+        fileProgress[entry.id] = 0
+        defer { fileProgress[entry.id] = nil }
+        let name = url.lastPathComponent
+        do {
+            let transcriber = try await models.transcriber()
+            let samples = try await AudioFileDecoder.decode(url)
+            let id = entry.id
+            let chunked = ChunkedTranscriber(base: transcriber) { [weak self] fraction in
+                Task { @MainActor in self?.fileProgress[id] = fraction }
+            }
+            // AI cleanup is for a sentence or two, with a few seconds to answer.
+            let cleanup = entry.duration <= FileTranscription.cleanupMaxSeconds ? llm : nil
+            let outcome = try await DictationPipeline(transcriber: chunked, llm: cleanup, settings: settings)
+                .run(samples: samples, bundleID: nil)
+            guard case let .inserted(text, cleanupError) = outcome else {
+                record(entry.id, .nothingHeard)
+                show(.message("Nothing heard in \(name)", isError: false))
+                return
+            }
+            record(entry.id, .done, text)
+            let skipped = llm != nil && cleanup == nil ? " (AI cleanup skipped: long file)" : ""
+            show(cleanupError.map { .message("Transcribed \(name) without AI cleanup: \($0)", isError: true) }
+                ?? .message("Transcribed \(name)\(skipped)", isError: false))
+        } catch {
+            record(entry.id, .failed(error.localizedDescription))
+            show(.message(error.localizedDescription, isError: true))
+        }
+    }
+
     private func record(_ id: String?, _ status: HistoryEntry.Status, _ text: String? = nil) {
         guard let id else { return }
         history.update(id, status: status, text: text)
@@ -399,6 +469,23 @@ final class AppController {
         }
         NSApp.activate()
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func showHistory() {
+        if historyWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 600),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
+            )
+            window.title = "Parlo History"
+            window.isReleasedWhenClosed = false
+            window.contentMinSize = NSSize(width: 560, height: 400)
+            window.contentView = NSHostingView(rootView: HistoryView(controller: self))
+            window.center()
+            historyWindow = window
+        }
+        NSApp.activate()
+        historyWindow?.makeKeyAndOrderFront(nil)
     }
 
     /// Saves a recording still in progress before quitting, so it can be retried from Recent.

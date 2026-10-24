@@ -121,11 +121,21 @@ struct MenuView: View {
 
     private var recentSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("RECENT")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.6)
-                .foregroundStyle(.tertiary)
-                .padding(.horizontal, 8)
+            HStack {
+                Text("RECENT")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Show all") {
+                    controller.showHistory()
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
             ForEach(controller.recent.prefix(5)) { entry in
                 RecentRow(entry: entry, copy: { controller.copy(entry) }, retry: { controller.retry(entry) })
             }
@@ -260,7 +270,7 @@ private struct RecentRow: View {
                     }
                 }
             }
-            if entry.status != .processing {
+            if entry.hasAudio && entry.status != .processing {
                 iconButton("arrow.clockwise", help: "Transcribe again and copy", action: retry)
             }
         }
