@@ -27,6 +27,8 @@ final class AppController {
     private(set) var hotkeyActive = false
     /// Words the user fixed right after a paste, offered for the dictionary.
     private(set) var inbox = SuggestionInbox()
+    /// Audio files transcribe one at a time, outside the dictation queue.
+    private var fileQueue: Task<Void, Never>?
     /// Progress (0 to 1) of audio files being transcribed, by history entry id. Absent while queued.
     private(set) var fileProgress: [String: Double] = [:]
     var settingsTab: SettingsTab = .general
@@ -43,18 +45,24 @@ final class AppController {
     private let windows = Windows()
     private var tapRetryTimer: Timer?
     private let previousApp = PreviousAppTracker()
-    /// Loaded at launch; until it is, recordings go straight to the transcriber.
+    /// Loaded at launch, and again after a recording if that failed (say, offline on first launch).
+    /// Until it is, recordings go straight to the transcriber.
     private var speechDetector: SileroSpeechDetector?
+    private var loadingSpeechDetector = false
     /// Watches the field after a paste for a fixed word; see `watchForCorrection`.
     private var correctionWatch: Task<Void, Never>?
+
+    /// The settings file could not be read at launch and was moved aside.
+    private let settingsWereReset: Bool
 
     private static let copiedHint = "Copied: press ⌘V to paste"
 
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
         self.store = store
-        let loaded = store.load()
+        let (loaded, quarantined) = store.load()
         settings = loaded
+        settingsWereReset = quarantined != nil
         apiKey = KeychainStore.read()
         var onActiveChange: (ModelID) -> Void = { _ in }
         let models = ModelManager(installer: EngineInstaller(), activeModelID: loaded.activeModelID) { onActiveChange($0) }
@@ -84,10 +92,22 @@ final class AppController {
             models.warmUp()
             if !settings.hasCompletedOnboarding { await installRecommendedModel() }
         }
-        Task { speechDetector = try? await SileroSpeechDetector.load() }
+        loadSpeechDetector()
         localLLM.inUse = settings.llm.usesLocalModel
         Task { await localLLM.files.refresh() }
         if !settings.hasCompletedOnboarding || !Permissions.allGranted { showOnboarding() }
+        if settingsWereReset {
+            show(.message("Settings were unreadable and have been reset. The old file was kept next to them.", isError: true))
+        }
+    }
+
+    private func loadSpeechDetector() {
+        guard speechDetector == nil, !loadingSpeechDetector else { return }
+        loadingSpeechDetector = true
+        Task {
+            speechDetector = try? await SileroSpeechDetector.load()
+            loadingSpeechDetector = false
+        }
     }
 
     /// New users start on Apple Speech, which works at once, and switch to Parakeet v3 when it's downloaded.
@@ -129,6 +149,8 @@ final class AppController {
 
     /// Every kept entry, newest first.
     var recent: [HistoryEntry] { history.entries }
+    /// Why the history could not be saved to disk; it still works in memory until the next save succeeds.
+    var historySaveError: String? { history.saveError }
 
     var suggestions: [DictionaryEntry] { inbox.pending }
 
@@ -243,6 +265,9 @@ final class AppController {
             }
             return
         }
+        guard !RecordingGuard.isDigitalSilence(samples) else {
+            return show(.message("The microphone sent no signal. Is the lid closed, or the input muted?", isError: true))
+        }
         let (entry, audioError) = history.add(samples: samples, kind: rec.command ? .command(selection: nil) : .dictation)
         show(audioError.map { .message("Couldn't save the recording (\($0.localizedDescription)). Transcribing anyway.", isError: true) }
             ?? .processing(command: rec.command))
@@ -251,6 +276,7 @@ final class AppController {
             Task { if let text = await selection.value { history.setSelection(entry.id, text) } }
         }
         let speech = speechDetector
+        loadSpeechDetector()
         enqueue(entry, via: .paste) { [weak self] transcriber in
             let kind: JobKind = rec.command ? .command(selection: await rec.selection?.value) : .dictation(bundleID: rec.bundleID)
             return try await self?.job(transcriber, speech: speech).run(samples, kind)
@@ -258,8 +284,12 @@ final class AppController {
     }
 
     /// Transcribes a saved recording again, without the speech check, and copies the result.
-    /// A command is applied again to the text it was first applied to.
+    /// A command is applied again to the text it was first applied to; a file is read again from where it was.
     func retry(_ entry: HistoryEntry) {
+        if case let .file(_, path?) = entry.kind {
+            history.update(entry.id, status: .processing, text: nil)
+            return queueFile(entry, URL(filePath: path))
+        }
         guard let samples = history.samples(entry.id) else { return }
         history.update(entry.id, status: .processing, text: nil)
         show(.processing(command: entry.isCommand))
@@ -269,26 +299,40 @@ final class AppController {
         }
     }
 
-    /// Transcribes an audio file with the active model and adds the result to History. Runs in the same queue as dictations.
+    /// Transcribes an audio file with the active model and adds the result to History.
     func transcribeFile(_ url: URL) {
-        let name = url.lastPathComponent
         let duration: Double
         do { duration = try AudioFileDecoder.duration(of: url) } catch {
             show(.message(error.localizedDescription, isError: true))
             return
         }
-        let entry = history.addFile(name: name, duration: duration)
-        enqueue(entry, via: .file(name: name)) { [weak self] transcriber in
-            guard let self else { return nil }
-            let id = entry.id
-            fileProgress[id] = 0
-            defer { fileProgress[id] = nil }
+        queueFile(history.addFile(url, duration: duration), url)
+    }
+
+    /// Files go one after another, a minute of audio at a time, and a dictation made meanwhile is
+    /// transcribed after the current minute instead of after the whole file.
+    private func queueFile(_ entry: HistoryEntry, _ url: URL) {
+        let previous = fileQueue
+        fileQueue = Task { [weak self] in
+            await previous?.value
+            await self?.runFile(entry, url)
+        }
+    }
+
+    private func runFile(_ entry: HistoryEntry, _ url: URL) async {
+        let id = entry.id, delivery = Delivery.file(name: url.lastPathComponent)
+        fileProgress[id] = 0
+        defer { fileProgress[id] = nil }
+        do {
             let samples = try await AudioFileDecoder.decode(url)
-            let chunked = ChunkedTranscriber(base: transcriber) { [weak self] fraction in
-                // A chunk still running when the job failed reports after it: don't bring the entry back.
+            let chunked = ChunkedTranscriber(base: BackgroundTranscriber(gate: gate)) { [weak self] fraction in
                 Task { @MainActor in if self?.fileProgress[id] != nil { self?.fileProgress[id] = fraction } }
             }
-            return try await job(chunked, speech: nil).run(samples, .dictation(bundleID: nil))
+            var job = job(chunked, speech: nil)
+            job.transcriptionDeadline = nil
+            await present(try await job.run(samples, .dictation(bundleID: nil)), for: entry, via: delivery)
+        } catch {
+            failed(error, entry, via: delivery)
         }
     }
 

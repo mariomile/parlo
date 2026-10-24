@@ -31,14 +31,6 @@ enum NemotronBackend {
         try await manager.loadModels(from: directory)
         return NemotronTranscriber(manager: manager)
     }
-
-    /// Nemotron prompt IDs are keyed by regional codes ("it-IT").
-    static func regionalCode(_ code: String?) -> String? {
-        guard let code else { return nil }
-        let regions = ["en": "en-US", "es": "es-ES", "fr": "fr-FR", "it": "it-IT", "pt": "pt-BR",
-                       "de": "de-DE", "zh": "zh-CN", "ja": "ja-JP"]
-        return regions[code] ?? code
-    }
 }
 
 struct NemotronTranscriber: Transcriber {
@@ -46,7 +38,7 @@ struct NemotronTranscriber: Transcriber {
 
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         await manager.reset()
-        await manager.setLanguage(NemotronBackend.regionalCode(languageCode))
+        await manager.setLanguage(LanguageCodes.regional(languageCode))
         _ = try await manager.process(samples: samples)
         return try await manager.finish()
     }

@@ -40,6 +40,12 @@ import Testing
         #expect(DictionaryReplacer.apply("hello", entries: e) == "hello")
     }
 
+    @Test func replacementsDoNotChain() {
+        // One entry's result is another's "heard as": each word is replaced once, from the original text.
+        let e = [DictionaryEntry(term: "Cloud", heardAs: ["clod"]), DictionaryEntry(term: "Claude", heardAs: ["cloud"])]
+        #expect(DictionaryReplacer.apply("clod e cloud", entries: e) == "Cloud e Claude")
+    }
+
     @Test func termWithItsOwnSpellingFixesCase() {
         let e = [DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "GitHub"), DictionaryEntry(term: "Parlo")]
         #expect(DictionaryReplacer.apply("Apri Claude.md su github", entries: e) == "Apri CLAUDE.md su GitHub")

@@ -1,10 +1,11 @@
 import Foundation
 
 /// Hands the transcriber to one caller at a time (Nemotron and WhisperKit keep per-call state on a shared
-/// instance): queued jobs in order, and live previews only while no job is waiting.
+/// instance): dictations in order, then background work such as the pieces of an audio file, and live
+/// previews only while nothing else is running or waiting.
 @MainActor
 public final class TranscriberGate {
-    /// Jobs queued or running.
+    /// Dictation jobs queued or running.
     public private(set) var pendingJobs = 0 {
         didSet { onChange() }
     }
@@ -13,7 +14,9 @@ public final class TranscriberGate {
     private let transcriber: () async throws -> any Transcriber
     private let reload: () -> Void
     private let previewGrace: Double
-    private var queue: Task<Void, Never>?
+    /// Someone holds the transcriber; whoever is waiting starts when it is released.
+    private var busy = false
+    private var waiting: [(background: Bool, start: () -> Void)] = []
     /// May outlive its caller: a CoreML or MLX call can't be interrupted.
     private var preview: Task<String?, Never>?
 
@@ -33,24 +36,67 @@ public final class TranscriberGate {
         _ job: @escaping (any Transcriber) async throws -> Void, onError: @escaping (any Error) -> Void
     ) {
         pendingJobs += 1
-        let previous = queue
-        queue = Task {
-            await previous?.value
-            if await !previewFinished() { reload() }
-            do {
-                try await job(try await transcriber())
-            } catch {
-                if error is DeadlineExceeded { reload() }
-                onError(error)
+        schedule(background: false) {
+            Task {
+                do {
+                    try await self.job(job)
+                } catch {
+                    onError(error)
+                }
+                self.pendingJobs -= 1
+                self.release()
             }
-            pendingJobs -= 1
         }
     }
 
-    /// Runs `work` unless a job is waiting or another preview is running; nil when skipped.
+    /// Runs `work` once the transcriber is free and no dictation is waiting for it, so a long audio file
+    /// sent piece by piece never holds up a dictation by more than one piece.
+    public func runInBackground<T: Sendable>(_ work: @escaping (any Transcriber) async throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            schedule(background: true) {
+                Task {
+                    do {
+                        continuation.resume(returning: try await self.job(work))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                    self.release()
+                }
+            }
+        }
+    }
+
+    private func job<T>(_ work: (any Transcriber) async throws -> T) async throws -> T {
+        if await !previewFinished() { reload() }
+        do {
+            return try await work(try await transcriber())
+        } catch {
+            if error is DeadlineExceeded { reload() }
+            throw error
+        }
+    }
+
+    private func schedule(background: Bool, _ start: @escaping () -> Void) {
+        guard busy else {
+            busy = true
+            return start()
+        }
+        waiting.append((background, start))
+    }
+
+    /// Dictations first, each kind in the order it arrived.
+    private func release() {
+        guard let next = waiting.firstIndex(where: { !$0.background }) ?? waiting.indices.first else {
+            busy = false
+            return
+        }
+        waiting.remove(at: next).start()
+    }
+
+    /// Runs `work` unless anything holds or waits for the transcriber, or another preview is running; nil when skipped.
     public func runIfIdle(_ work: @escaping @Sendable (any Transcriber) async -> String?) async -> String? {
-        guard pendingJobs == 0, preview == nil, let transcriber = try? await transcriber(),
-              pendingJobs == 0, preview == nil else { return nil }
+        guard !busy, preview == nil, let transcriber = try? await transcriber(),
+              !busy, preview == nil else { return nil }
         let task = Task { await work(transcriber) }
         preview = task
         let result = await task.value

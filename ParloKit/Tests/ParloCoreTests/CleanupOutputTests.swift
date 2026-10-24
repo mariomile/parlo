@@ -52,6 +52,12 @@ import Testing
         #expect(CleanupOutput.accepted("Ecco il testo:", input: input) == nil)
     }
 
+    @Test func preambleWithEmojiIsCutAtTheRightPlace() {
+        // Emoji and flags are several UTF-16 units each: the cut must not land inside the text.
+        #expect(CleanupOutput.stripWrappers("Ecco 🎉🇮🇹 il testo: Ho fatto il commit.", input: input) == "Ho fatto il commit.")
+        #expect(CleanupOutput.stripWrappers("Sure 👍🏽:\nHo fatto il commit 🚀", input: input) == "Ho fatto il commit 🚀")
+    }
+
     @Test func ratioIsMeasuredAfterStripping() {
         // A long preamble must not make a too-short answer look fine.
         let reply = "Ecco il testo pulito:\nOk."

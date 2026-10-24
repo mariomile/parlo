@@ -600,7 +600,7 @@ private struct DictionaryTab: View {
                 ForEach($controller.settings.dictionary) { $entry in
                     HStack {
                         TextField("Term", text: $entry.term).frame(maxWidth: 180)
-                        HeardAsField(heardAs: $entry.heardAs)
+                        HeardAsField(controller: controller, entryID: entry.id, initial: entry.heardAs)
                         RemoveButton(help: "Remove") {
                             controller.settings.dictionary.removeAll { $0.id == entry.id }
                         }
@@ -634,15 +634,18 @@ private struct DictionaryTab: View {
 }
 
 /// Edits the variants as free text; splits into the list when editing ends, so commas and spaces survive typing.
+/// Commits by entry id: the field can end editing after its row was removed or the list reordered.
 private struct HeardAsField: View {
-    @Binding var heardAs: [String]
+    let controller: AppController
+    let entryID: UUID
+    let initial: [String]
     @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
         TextField("Often heard as (comma-separated)", text: $text)
             .focused($focused)
-            .onAppear { text = heardAs.joined(separator: ", ") }
+            .onAppear { text = initial.joined(separator: ", ") }
             .onSubmit(commit)
             .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
             .onDisappear(perform: commit)
@@ -650,7 +653,9 @@ private struct HeardAsField: View {
 
     private func commit() {
         let parsed = DictionaryTab.split(text)
-        if parsed != heardAs { heardAs = parsed }
+        guard let i = controller.settings.dictionary.firstIndex(where: { $0.id == entryID }),
+              controller.settings.dictionary[i].heardAs != parsed else { return }
+        controller.settings.dictionary[i].heardAs = parsed
     }
 }
 

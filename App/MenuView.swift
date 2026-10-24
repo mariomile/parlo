@@ -302,8 +302,8 @@ private struct RecentRow: View {
                 CopyButton(copy: copy, label: icon)
                     .buttonStyle(PressableStyle())
             }
-            if entry.hasAudio && entry.status != .processing {
-                iconButton("arrow.clockwise", help: "Transcribe again and copy", action: retry)
+            if entry.canRetry && entry.status != .processing {
+                iconButton("arrow.clockwise", help: entry.isFile ? "Transcribe the file again" : "Transcribe again and copy", action: retry)
             }
         }
         .padding(.horizontal, 8)

@@ -101,6 +101,39 @@ final class SlowTranscriber: Transcriber, @unchecked Sendable {
         #expect(reloads.value == 1)
     }
 
+    @Test func dictationsGoBeforeBackgroundWork() async throws {
+        let g = gate(FakeTranscriber(text: ""))
+        let hold = LockedBox(true)
+        var order: [String] = []
+        let first = Task {
+            try await g.runInBackground { _ in
+                order.append("piece 1")
+                while hold.value { try await Task.sleep(for: .milliseconds(2)) }
+            }
+        }
+        try await waitUntil { order == ["piece 1"] }
+        let second = Task { try await g.runInBackground { _ in order.append("piece 2") } }
+        try await Task.sleep(for: .milliseconds(10))
+        g.enqueue({ _ in order.append("dictation") }, onError: { _ in })
+        #expect(await g.runIfIdle { _ in "preview" } == nil)
+        hold.value = false
+        try await first.value
+        try await second.value
+        try await waitUntil { g.pendingJobs == 0 }
+        #expect(order == ["piece 1", "dictation", "piece 2"])
+        #expect(await g.runIfIdle { _ in "preview" } == "preview")
+    }
+
+    @Test func backgroundDeadlineReloadsAndThrows() async throws {
+        let reloads = LockedBox(0)
+        let g = gate(FakeTranscriber(text: ""), reloads: reloads)
+        await #expect(throws: DeadlineExceeded.self) {
+            try await g.runInBackground { _ in throw DeadlineExceeded(seconds: 1) }
+        }
+        #expect(reloads.value == 1)
+        #expect(try await g.runInBackground { _ in "next" } == "next")
+    }
+
     @Test func previewerShowsTextWhileIdle() async throws {
         let g = gate(FakeTranscriber(text: " ciao "))
         let previewer = LivePreviewer(gate: g, interval: 0.01)

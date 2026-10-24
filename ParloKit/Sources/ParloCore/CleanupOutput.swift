@@ -34,9 +34,8 @@ enum CleanupOutput {
         let inputStart = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let range = NSRange(text.startIndex..., in: text)
         if let match = preamble.firstMatch(in: text, range: range), let word = Range(match.range(at: 1), in: text),
-           !inputStart.hasPrefix(text[word].lowercased()) {
-            text = String(text[text.index(text.startIndex, offsetBy: match.range.length)...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+           let whole = Range(match.range, in: text), !inputStart.hasPrefix(text[word].lowercased()) {
+            text = String(text[whole.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         for (open, close) in quotePairs where text.count > 1 && text.first == open && text.last == close

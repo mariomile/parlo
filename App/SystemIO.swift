@@ -64,25 +64,52 @@ enum TextInserter {
         await ClipboardTurn.take { await paste(text) }
     }
 
+    /// The user's clipboard goes back once the target app has read the text, not after a guessed delay:
+    /// a busy app that pastes late would otherwise paste the user's old clipboard instead.
     private static func paste(_ text: String) async {
         let pb = NSPasteboard.general
         let saved = PasteboardSnapshot(pb)
+        let provider = PasteProvider(text: text)
+        let item = NSPasteboardItem()
+        item.setDataProvider(provider, forTypes: [.string])
+        item.setData(Data(), forType: PasteboardSnapshot.transientType)
         pb.clearContents()
-        pb.setString(text, forType: .string)
-        pb.setData(Data(), forType: PasteboardSnapshot.transientType)
+        pb.writeObjects([item])
         let ours = pb.changeCount
         KeyPoster.paste()
-        try? await Task.sleep(for: .milliseconds(600))
+        // Up to 3 s for the read (a field that can't take text never reads), then a beat for apps that read twice.
+        for _ in 0..<150 where !provider.wasRead {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        if provider.wasRead { try? await Task.sleep(for: .milliseconds(150)) }
         if pb.changeCount == ours { saved.restore(pb) }
     }
 }
 
-enum SelectionReader {
-    /// Copies the current selection with Cmd+C and restores the clipboard. Nil when nothing is selected.
-    /// Waits up to 1 s: busy Electron apps can take a while to answer Cmd+C.
-    static func read() async -> String? {
-        await ClipboardTurn.take { await copySelection() }
+/// Supplies the pasted text only when an app asks for it, and notes that it did.
+private final class PasteProvider: NSObject, @MainActor NSPasteboardItemDataProvider {
+    let text: String
+    private(set) var wasRead = false
+
+    init(text: String) {
+        self.text = text
     }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        item.setString(text, forType: type)
+        wasRead = true
+    }
+}
+
+enum SelectionReader {
+    /// The selected text, read through Accessibility when the app exposes it; otherwise copied with Cmd+C,
+    /// restoring the clipboard. Nil when nothing is selected.
+    static func read() async -> String? {
+        if let text = await FocusedElement.selectedText() { return text }
+        return await ClipboardTurn.take { await copySelection() }
+    }
+
+    /// Waits up to 1 s: busy Electron apps can take a while to answer Cmd+C.
 
     private static func copySelection() async -> String? {
         let pb = NSPasteboard.general
@@ -135,11 +162,22 @@ nonisolated enum FocusedElement {
             ? .nothing : .unknown
     }
 
+    /// The focused element's selected text; nil when it has none, doesn't expose it, or is a password field.
+    @concurrent static func selectedText() async -> String? {
+        guard let element = focused(), !isSecure(element),
+              let text = string(element, kAXSelectedTextAttribute), !text.isEmpty
+        else { return nil }
+        return text
+    }
+
+    private static func isSecure(_ element: AXUIElement) -> Bool {
+        string(element, kAXSubroleAttribute) == kAXSecureTextFieldSubrole as String
+            || string(element, kAXRoleAttribute) == "AXSecureTextField"
+    }
+
     /// The element's text, or nil for password fields, very long text, or no answer.
     static func text(_ element: AXUIElement) -> String? {
-        guard string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole as String,
-              string(element, kAXRoleAttribute) != "AXSecureTextField"
-        else { return nil }
+        guard !isSecure(element) else { return nil }
         if let count = attribute(element, kAXNumberOfCharactersAttribute) as? Int, count > maxReadLength { return nil }
         guard let text = string(element, kAXValueAttribute), text.count <= maxReadLength else { return nil }
         return text

@@ -37,7 +37,10 @@ public struct TranscriptionJob: Sendable {
     }
 
     /// Time the engine gets for `seconds` of audio: slower than every engine we ship.
-    var transcriptionDeadline: @Sendable (_ seconds: Double) -> Double = { 30 + $0 }
+    /// nil when the transcriber keeps its own deadlines, as `BackgroundTranscriber` does per piece.
+    public var transcriptionDeadline: (@Sendable (_ seconds: Double) -> Double)? = Self.engineDeadline
+
+    public static let engineDeadline: @Sendable (_ seconds: Double) -> Double = { 30 + $0 }
 
     let transcriber: any Transcriber
     let llm: (any ChatCompleting)?
@@ -78,10 +81,14 @@ public struct TranscriptionJob: Sendable {
 
     private func transcribe(_ samples: [Float], dictionary: [DictionaryEntry]) async throws -> String {
         let transcriber = transcriber, languageCode = settings.languageCode
-        return try await Deadline.run(seconds: transcriptionDeadline(Audio.seconds(samples.count))) {
+        let text = if let transcriptionDeadline {
+            try await Deadline.run(seconds: transcriptionDeadline(Audio.seconds(samples.count))) {
+                try await transcriber.transcribe(samples, languageCode: languageCode, dictionary: dictionary)
+            }
+        } else {
             try await transcriber.transcribe(samples, languageCode: languageCode, dictionary: dictionary)
         }
-        .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func clean(_ raw: String, bundleID: String?) async -> JobOutcome {

@@ -22,13 +22,16 @@ public enum KeychainStore {
         return key.isEmpty ? nil : key
     }
 
-    /// Saves the key; nil or empty deletes it.
+    /// Saves the key; nil or empty deletes it. The old key stays if the new one can't be written.
     @discardableResult
     public static func save(_ key: String?) -> Bool {
-        SecItemDelete(query as CFDictionary)
-        guard let key, !key.isEmpty else { return true }
-        var q = query
-        q[kSecValueData as String] = Data(key.utf8)
-        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+        guard let key, !key.isEmpty else {
+            let status = SecItemDelete(query as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        let value = [kSecValueData as String: Data(key.utf8)]
+        let status = SecItemUpdate(query as CFDictionary, value as CFDictionary)
+        guard status == errSecItemNotFound else { return status == errSecSuccess }
+        return SecItemAdd(query.merging(value) { $1 } as CFDictionary, nil) == errSecSuccess
     }
 }

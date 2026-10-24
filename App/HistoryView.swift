@@ -14,7 +14,7 @@ struct HistoryView: View {
         guard !q.isEmpty else { return controller.recent }
         return controller.recent.filter {
             if $0.text?.localizedCaseInsensitiveContains(q) == true { return true }
-            if case let .file(name) = $0.kind { return name.localizedCaseInsensitiveContains(q) }
+            if case let .file(name, _) = $0.kind { return name.localizedCaseInsensitiveContains(q) }
             return false
         }
     }
@@ -23,6 +23,14 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             StatsHeader(stats: HistoryStats(controller.recent))
             Divider()
+            if let error = controller.historySaveError {
+                Label("History can't be saved to disk: \(error)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                Divider()
+            }
             toolbar
             Divider()
             if shown.isEmpty {
@@ -154,8 +162,10 @@ private struct HistoryRow: View {
                         .buttonStyle(.borderless)
                     button("text.insert", "Paste into the previous app") { controller.paste(entry) }
                 }
-                if entry.hasAudio && entry.status != .processing {
-                    button("arrow.clockwise", "Transcribe again and copy") { controller.retry(entry) }
+                if entry.canRetry && entry.status != .processing {
+                    button("arrow.clockwise", entry.isFile ? "Transcribe the file again" : "Transcribe again and copy") {
+                        controller.retry(entry)
+                    }
                 }
                 button("trash", "Delete") { controller.delete(entry) }
             }
