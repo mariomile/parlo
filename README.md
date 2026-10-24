@@ -1,3 +1,5 @@
+<img src="assets/parlo-mark.svg" width="56" alt="">
+
 # Parlo
 
 Voice dictation for macOS, in the style of FluidVoice and Wispr Flow. Hold **fn**, speak, release: Parlo transcribes on this Mac, optionally cleans the text up with an LLM, and pastes it into whatever field has focus, in any app.

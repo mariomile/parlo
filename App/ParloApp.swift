@@ -24,7 +24,11 @@ struct ParloApp: App {
         MenuBarExtra {
             MenuView(controller: delegate.controller)
         } label: {
-            Image(systemName: delegate.controller.phase == .idle ? "waveform" : "mic.fill")
+            if delegate.controller.phase == .idle {
+                Image("MenuBarMark")
+            } else {
+                Image(systemName: "mic.fill")
+            }
         }
         .menuBarExtraStyle(.window)
     }

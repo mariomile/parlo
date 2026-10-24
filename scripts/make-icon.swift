@@ -36,32 +36,19 @@ func render() -> NSBitmapImageRep {
     color(0xFFFFFF, 0.14).setStroke()
     edge.stroke()
 
-    // Speech bubble with a tail at the bottom left.
-    let bubble = NSRect(x: 232, y: 330, width: 560, height: 400)
-    let bubblePath = NSBezierPath(roundedRect: bubble, xRadius: 150, yRadius: 150)
-    let tail = NSBezierPath()
-    tail.move(to: NSPoint(x: 330, y: 360))
-    tail.curve(to: NSPoint(x: 268, y: 238), controlPoint1: NSPoint(x: 330, y: 300), controlPoint2: NSPoint(x: 305, y: 262))
-    tail.curve(to: NSPoint(x: 440, y: 338), controlPoint1: NSPoint(x: 350, y: 250), controlPoint2: NSPoint(x: 410, y: 290))
-    tail.close()
-    bubblePath.append(tail)
-
-    color(0xEDEDED).setFill()
-    bubblePath.fill()
-
-    // Waveform bars inside the bubble, in the body's black.
-    let heights: [CGFloat] = [0.38, 0.72, 1.0, 0.6, 0.85, 0.45]
-    let barWidth: CGFloat = 46, gap: CGFloat = 30, maxHeight: CGFloat = 250
-    let totalWidth = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
-    let bars = NSBezierPath()
-    for (i, h) in heights.enumerated() {
-        let height = maxHeight * h
-        let x = bubble.midX - totalWidth / 2 + CGFloat(i) * (barWidth + gap)
-        bars.append(NSBezierPath(roundedRect: NSRect(x: x, y: bubble.midY - height / 2, width: barWidth, height: height),
-                                 xRadius: barWidth / 2, yRadius: barWidth / 2))
+    // The mark, a lowercase p: a ring and a stem, drawn on the 100-unit grid of assets/parlo-mark.svg.
+    let scale: CGFloat = 4.6
+    func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+        NSPoint(x: body.midX + (x - 50) * scale, y: body.midY - (y - 50) * scale)
     }
-    color(0x000000).setFill()
-    bars.fill()
+    let mark = NSBezierPath()
+    mark.appendArc(withCenter: point(50, 40), radius: 28 * scale, startAngle: 0, endAngle: 360)
+    mark.move(to: point(22, 40))
+    mark.line(to: point(22, 88))
+    mark.lineWidth = 16 * scale
+    mark.lineCapStyle = .round
+    color(0xFFFFFF).setStroke()
+    mark.stroke()
 
     NSGraphicsContext.restoreGraphicsState()
     return rep
