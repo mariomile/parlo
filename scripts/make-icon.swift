@@ -36,19 +36,17 @@ func render() -> NSBitmapImageRep {
     color(0xFFFFFF, 0.14).setStroke()
     edge.stroke()
 
-    // The mark, a lowercase p: a ring and a stem, drawn on the 100-unit grid of assets/parlo-mark.svg.
-    let scale: CGFloat = 4.6
-    func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
-        NSPoint(x: body.midX + (x - 50) * scale, y: body.midY - (y - 50) * scale)
+    // The mark, the island: a pill with level bars cut out, on the 100-unit grid of assets/parlo-mark.svg.
+    let scale: CGFloat = 5.2
+    func rect(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat) -> NSRect {
+        NSRect(x: body.midX + (x - 50) * scale, y: body.midY - (y + height - 50) * scale, width: width * scale, height: height * scale)
     }
-    let mark = NSBezierPath()
-    mark.appendArc(withCenter: point(50, 40), radius: 28 * scale, startAngle: 0, endAngle: 360)
-    mark.move(to: point(22, 40))
-    mark.line(to: point(22, 88))
-    mark.lineWidth = 16 * scale
-    mark.lineCapStyle = .round
-    color(0xFFFFFF).setStroke()
-    mark.stroke()
+    color(0xFFFFFF).setFill()
+    NSBezierPath(roundedRect: rect(2, 24, 96, 52), xRadius: 26 * scale, yRadius: 26 * scale).fill()
+    color(0x000000).setFill()
+    for (x, y, height) in [(25, 42, 16), (39, 35, 30), (53, 38, 24), (67, 44, 12)] as [(CGFloat, CGFloat, CGFloat)] {
+        NSBezierPath(roundedRect: rect(x, y, 8, height), xRadius: 4 * scale, yRadius: 4 * scale).fill()
+    }
 
     NSGraphicsContext.restoreGraphicsState()
     return rep
