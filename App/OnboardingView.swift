@@ -9,6 +9,8 @@ struct OnboardingView: View {
     @State private var accessibility = Permissions.accessibility
     @State private var inputMonitoring = Permissions.inputMonitoring
     @State private var openAtLogin = true
+    /// Onboarding also comes back when a permission goes missing; the login choice is only asked once.
+    private var firstRun: Bool { !controller.settings.hasCompletedOnboarding }
     private let poll = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -57,9 +59,9 @@ struct OnboardingView: View {
             }
 
             HStack {
-                Toggle("Open Parlo at login", isOn: $openAtLogin)
+                if firstRun { Toggle("Open Parlo at login", isOn: $openAtLogin) }
                 Spacer()
-                Button("Done") { controller.finishOnboarding(openAtLogin: openAtLogin) }
+                Button("Done") { controller.finishOnboarding(openAtLogin: firstRun ? openAtLogin : nil) }
                     .keyboardShortcut(.defaultAction)
             }
         }

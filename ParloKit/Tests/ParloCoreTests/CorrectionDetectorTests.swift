@@ -48,4 +48,20 @@ import Testing
         #expect(suggest("È molto bello.", "È stupendo.") == nil)
         #expect(suggest("Ciao", "Ciao!") == nil)
     }
+
+    @Test func grammarNumbersAndWordingAreIgnored() {
+        #expect(suggest("Sono andato a casa.", "Sono andata a casa.") == nil)
+        #expect(suggest("Ho visto la ragazze.", "Ho visto le ragazze.") == nil)
+        #expect(suggest("Ci vediamo alle 15.", "Ci vediamo alle 16.") == nil)
+        #expect(suggest("Ciao Marco, tutto bene?", "Ciao Mario, tutto bene?") == nil)
+        #expect(suggest("Ci vediamo martedì.", "Ci vediamo mercoledì.") == nil)
+    }
+
+    @Test func editingEndsWhenTheTextAroundThePasteChanges() {
+        let before = "Note: Va bene. Fine"
+        #expect(CorrectionDetector.isEditing(pasted: "Va bene.", before: before, now: "Note: Va benissimo. Fine"))
+        #expect(!CorrectionDetector.isEditing(pasted: "Va bene.", before: before, now: "Note: Fine"))
+        // A chat box: the message was sent and the field cleared.
+        #expect(!CorrectionDetector.isEditing(pasted: "Va bene.", before: "Va bene.", now: ""))
+    }
 }

@@ -8,14 +8,20 @@ public enum PasteTarget {
         case element(role: String?, hasTextSelection: Bool, valueSettable: Bool)
     }
 
-    static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+    /// Roles that never take typed text. Everything else gets the paste: Electron apps and terminals
+    /// report real input areas as windows, groups or web areas, and a slow app may not report a role at all.
+    static let nonTextRoles: Set<String> = [
+        "AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXDisclosureTriangle",
+        "AXList", "AXOutline", "AXTable", "AXBrowser", "AXImage", "AXSlider", "AXTabGroup", "AXToolbar",
+        "AXMenu", "AXMenuBar", "AXMenuBarItem", "AXMenuItem", "AXLink",
+    ]
 
     public static func acceptsText(_ focus: Focus) -> Bool {
         switch focus {
         case .nothing: false
         case .unknown: true
         case let .element(role, hasTextSelection, valueSettable):
-            hasTextSelection || valueSettable || role.map(textRoles.contains) == true
+            hasTextSelection || valueSettable || !(role.map(nonTextRoles.contains) ?? false)
         }
     }
 }

@@ -29,6 +29,9 @@ import Testing
             "Aggiungi una nuova riga alla tabella.",
             "Add a new line of code here.",
             "Il punto elenco è troppo lungo",
+            "A capo del progetto c'è Marco.",
+            "Ho parlato con Luca, a capo dell'ufficio, ieri.",
+            "Vediamo. New line of products is out.",
         ]
         for s in sentences { #expect(VoiceFormatting.apply(s) == s) }
     }

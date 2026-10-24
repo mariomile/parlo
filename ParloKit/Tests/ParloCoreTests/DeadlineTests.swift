@@ -21,4 +21,15 @@ import Testing
         }
         #expect(Date.now.timeIntervalSince(start) < 2)
     }
+
+    @Test func cancellingTheCallerStopsTheWait() async {
+        let task = Task {
+            try await Deadline.run(seconds: 60) {
+                while true { try? await Task.sleep(for: .seconds(1)) }
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
 }

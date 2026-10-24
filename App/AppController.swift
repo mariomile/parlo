@@ -64,6 +64,8 @@ final class AppController {
     private var speechDetector: SileroSpeechDetector?
     /// Watches the field after a paste for a fixed word; see `watchForCorrection`.
     private var correctionWatch: Task<Void, Never>?
+    /// Terms the user said no to, not offered again until Parlo restarts.
+    private var dismissedSuggestions: Set<String> = []
 
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
@@ -144,9 +146,14 @@ final class AppController {
         if let text = entry.text { copy(text) }
     }
 
+    /// Waits for any paste or selection read in progress, so their clipboard restore can't undo this copy.
     private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        Task {
+            await ClipboardTurn.take {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+        }
     }
 
     func delete(_ entry: HistoryEntry) {
@@ -289,6 +296,10 @@ final class AppController {
         } catch {
             show(.message("Couldn't save the recording: \(error.localizedDescription). Transcribing anyway.", isError: true))
         }
+        // Kept for Retry even if this job fails before it runs, or Parlo quits while it's queued.
+        if let entryID, let selection = rec.selection {
+            Task { if let text = await selection.value { history.setSelection(entryID, text) } }
+        }
         enqueue { [weak self] in await self?.process(samples, rec, entryID: entryID) }
     }
 
@@ -310,7 +321,6 @@ final class AppController {
             let transcriber = try await models.transcriber()
             if rec.command {
                 let selection = await rec.selection?.value
-                if let entryID, let selection { history.update(entryID, status: .processing, text: nil, selection: selection) }
                 let pipeline = CommandPipeline(
                     transcriber: transcriber, llm: llm, languageCode: settings.languageCode,
                     speech: speechDetector
@@ -471,7 +481,7 @@ final class AppController {
 
     /// Pastes into the focused field. With no field to paste into, the text stays on the clipboard instead.
     private func deliver(_ text: String, warning: String?) async {
-        let target = FocusedElement.current()
+        let target = await FocusedElement.current()
         guard PasteTarget.acceptsText(target.focus) else {
             copy(text)
             show(.message("No text field to paste into. Copied: press ⌘V to paste", isError: false))
@@ -479,34 +489,30 @@ final class AppController {
         }
         await TextInserter.insert(text)
         show(warning.map { .message($0, isError: true) } ?? .done)
-        if let element = target.element { watchForCorrection(of: text, in: element) }
+        if let field = target.field { watchForCorrection(of: text, in: field) }
     }
 
     // MARK: - Dictionary suggestions
 
     /// Reads the field again every 2 s for 30 s, while it keeps focus and until the next dictation,
     /// and offers a word the user fixed as a dictionary entry.
-    private func watchForCorrection(of pasted: String, in element: AXUIElement) {
+    private func watchForCorrection(of pasted: String, in field: WatchedField) {
         correctionWatch?.cancel()
-        guard let before = FocusedElement.text(element), before.contains(pasted) else { return }
         correctionWatch = Task { [weak self] in
-            var latest = before
-            for _ in 0..<15 {
-                do { try await Task.sleep(for: .seconds(2)) } catch { break }
-                guard FocusedElement.isFocused(element), let text = FocusedElement.text(element) else { break }
-                latest = text
-            }
-            if let entry = CorrectionDetector.suggestion(pasted: pasted, before: before, after: latest) {
-                self?.suggest(entry)
-            }
+            guard let edit = await field.edit(of: pasted),
+                  let entry = CorrectionDetector.suggestion(pasted: pasted, before: edit.before, after: edit.after)
+            else { return }
+            self?.suggest(entry)
         }
     }
 
     private func suggest(_ entry: DictionaryEntry) {
         let known = settings.dictionary.map { $0.term.lowercased() } + suggestions.map { $0.term.lowercased() }
-        guard !known.contains(entry.term.lowercased()) else { return }
+        guard !known.contains(entry.term.lowercased()), !dismissedSuggestions.contains(entry.term.lowercased())
+        else { return }
         suggestions.insert(entry, at: 0)
-        show(.message("Add “\(entry.term)” to your dictionary? It's in Parlo's menu", isError: false))
+        // Don't cover the HUD of a dictation that's still being transcribed.
+        if phase == .idle { show(.message("Add “\(entry.term)” to your dictionary? It's in Parlo's menu", isError: false)) }
     }
 
     func acceptSuggestion(_ entry: DictionaryEntry) {
@@ -516,6 +522,7 @@ final class AppController {
 
     func dismissSuggestion(_ entry: DictionaryEntry) {
         suggestions.removeAll { $0.id == entry.id }
+        dismissedSuggestions.insert(entry.term.lowercased())
     }
 
     // MARK: - Windows
@@ -586,8 +593,9 @@ final class AppController {
         }
     }
 
-    func finishOnboarding(openAtLogin: Bool) {
-        if openAtLogin != LoginItem.isEnabled { try? LoginItem.set(openAtLogin) }
+    /// `openAtLogin` is only offered on the first run; later visits leave the Settings choice alone.
+    func finishOnboarding(openAtLogin: Bool?) {
+        if let openAtLogin, openAtLogin != LoginItem.isOn { try? LoginItem.set(openAtLogin) }
         settings.hasCompletedOnboarding = true
         onboardingWindow?.close()
     }

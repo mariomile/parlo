@@ -99,44 +99,50 @@ enum SelectionReader {
     }
 }
 
-/// The element with keyboard focus, through Accessibility.
-enum FocusedElement {
+/// The element with keyboard focus, through Accessibility. Off the main thread: a slow app can take
+/// a quarter second per call, and the hotkey tap runs on the main run loop.
+nonisolated enum FocusedElement {
     /// Larger fields aren't read back: comparing them every few seconds isn't worth it.
     static let maxReadLength = 100_000
 
-    static func current() -> (element: AXUIElement?, focus: PasteTarget.Focus) {
+    @concurrent static func current() async -> (field: WatchedField?, focus: PasteTarget.Focus) {
+        guard let element = focused() else { return (nil, focusError()) }
+        var settable: DarwinBoolean = false
+        AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+        let focus = PasteTarget.Focus.element(
+            role: string(element, kAXRoleAttribute),
+            hasTextSelection: attribute(element, kAXSelectedTextRangeAttribute) != nil,
+            valueSettable: settable.boolValue
+        )
+        return (WatchedField(element: element), focus)
+    }
+
+    static func focused() -> AXUIElement? {
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.25)
         var value: CFTypeRef?
-        switch AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) {
-        case .success:
-            guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return (nil, .unknown) }
-            let element = value as! AXUIElement
-            var settable: DarwinBoolean = false
-            AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
-            let focus = PasteTarget.Focus.element(
-                role: string(element, kAXRoleAttribute),
-                hasTextSelection: attribute(element, kAXSelectedTextRangeAttribute) != nil,
-                valueSettable: settable.boolValue
-            )
-            return (element, focus)
-        case .noValue: return (nil, .nothing)
-        default: return (nil, .unknown)
-        }
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID()
+        else { return nil }
+        return (value as! AXUIElement)
+    }
+
+    /// Why `focused()` found nothing: no focus at all, or no answer.
+    private static func focusError() -> PasteTarget.Focus {
+        var value: CFTypeRef?
+        let system = AXUIElementCreateSystemWide()
+        return AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) == .noValue
+            ? .nothing : .unknown
     }
 
     /// The element's text, or nil for password fields, very long text, or no answer.
     static func text(_ element: AXUIElement) -> String? {
         guard string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole as String,
-              string(element, kAXRoleAttribute) != "AXSecureTextField",
-              let text = string(element, kAXValueAttribute), text.count <= maxReadLength
+              string(element, kAXRoleAttribute) != "AXSecureTextField"
         else { return nil }
+        if let count = attribute(element, kAXNumberOfCharactersAttribute) as? Int, count > maxReadLength { return nil }
+        guard let text = string(element, kAXValueAttribute), text.count <= maxReadLength else { return nil }
         return text
-    }
-
-    static func isFocused(_ element: AXUIElement) -> Bool {
-        guard let now = current().element else { return false }
-        return CFEqual(now, element)
     }
 
     private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -150,9 +156,32 @@ enum FocusedElement {
     }
 }
 
+/// The field Parlo just pasted into, watched for the user fixing a word.
+nonisolated struct WatchedField: @unchecked Sendable { // AXUIElement can be used from any thread.
+    let element: AXUIElement
+
+    /// The field's text right after the paste, and again after 30 s or as soon as the user leaves the
+    /// field or changes the text around the paste (a sent message, a cleared field).
+    @concurrent func edit(of pasted: String) async -> (before: String, after: String)? {
+        guard let before = FocusedElement.text(element), before.contains(pasted) else { return nil }
+        var after = before
+        for _ in 0..<15 {
+            do { try await Task.sleep(for: .seconds(2)) } catch { break }
+            guard let now = FocusedElement.focused(), CFEqual(now, element),
+                  let text = FocusedElement.text(element),
+                  CorrectionDetector.isEditing(pasted: pasted, before: before, now: text)
+            else { break }
+            after = text
+        }
+        return (before, after)
+    }
+}
+
 /// Opening Parlo when the user logs in, as a login item they can also see in System Settings.
 enum LoginItem {
     static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+    /// Registered, including while it waits for the user's approval in System Settings.
+    static var isOn: Bool { isEnabled || needsApproval }
     static var needsApproval: Bool { SMAppService.mainApp.status == .requiresApproval }
 
     static func set(_ enabled: Bool) throws {

@@ -1,10 +1,12 @@
 import Foundation
 
 /// Notices when the user fixes a word Parlo just pasted ("Cloud MD" → "CLAUDE.md") and turns the fix
-/// into a dictionary suggestion. Only small, similar-sounding edits count: rewrites and style changes don't.
+/// into a dictionary suggestion. Only small, similar-sounding edits to term-like words count: rewrites,
+/// style changes, grammar fixes ("andato" → "andata") and number or day changes don't.
 public enum CorrectionDetector {
     static let maxWords = 3
     static let minSimilarity = 0.5
+    static let minLetters = 4
 
     /// `before`: the text field right after pasting `pasted`; `after`: the same field a little later.
     public static func suggestion(pasted: String, before: String, after: String) -> DictionaryEntry? {
@@ -29,11 +31,40 @@ public enum CorrectionDetector {
 
         let heard = word(in: old, from: prefix, to: old.count - suffix)
         let term = word(in: new, from: prefix, to: new.count - suffix)
+        let heardWords = heard.split(separator: " ").count, termWords = term.split(separator: " ").count
         guard !heard.isEmpty, !term.isEmpty, heard != term,
-              heard.split(separator: " ").count <= maxWords + 1, term.split(separator: " ").count <= maxWords,
+              heardWords <= maxWords + 1, termWords <= maxWords,
+              letters(heard).count >= minLetters, letters(term).count >= minLetters,
               similarity(heard, term) >= minSimilarity
         else { return nil }
-        return DictionaryEntry(term: term, heardAs: heard.lowercased() == term.lowercased() ? [] : [heard])
+        let caseOnly = heard.lowercased() == term.lowercased()
+        if !caseOnly {
+            // An ordinary lowercase word replaced by another is a wording fix, not a misheard term.
+            let termLike = term.contains { $0.isUppercase || $0.isNumber || !($0.isLetter || $0 == " ") }
+            guard termLike || heardWords != termWords else { return nil }
+            guard !onlyEndingDiffers(heard, term) else { return nil }
+        }
+        return DictionaryEntry(term: term, heardAs: caseOnly ? [] : [heard])
+    }
+
+    /// Whether `now`, a later reading of the field, still looks like the user editing the paste: the
+    /// text before and after it is unchanged. Sending a message or clearing the field ends the edit.
+    public static func isEditing(pasted: String, before: String, now: String) -> Bool {
+        guard let range = before.range(of: pasted, options: .backwards) else { return false }
+        let head = before[..<range.lowerBound], tail = before[range.upperBound...]
+        return now.count > head.count + tail.count && now.hasPrefix(head) && now.hasSuffix(tail)
+    }
+
+    /// "Marco" → "Mario", "andato" → "andata": only the last letter or two changed, as in inflection.
+    private static func onlyEndingDiffers(_ a: String, _ b: String) -> Bool {
+        let x = letters(a), y = letters(b)
+        var shared = 0
+        while shared < min(x.count, y.count), x[shared] == y[shared] { shared += 1 }
+        return shared >= 3 && x.count - shared <= 2 && y.count - shared <= 2
+    }
+
+    private static func letters(_ s: String) -> [Character] {
+        Array(s.lowercased().filter(\.isLetter))
     }
 
     /// The changed span `start..<end` widened to whole words, without surrounding punctuation.

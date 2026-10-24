@@ -68,15 +68,17 @@ private struct GeneralTab: View {
 }
 
 private struct LoginItemToggle: View {
-    @State private var enabled = LoginItem.isEnabled
+    @State private var on = LoginItem.isOn
+    @State private var needsApproval = LoginItem.needsApproval
     @State private var error: String?
 
     var body: some View {
-        Toggle("Open at login", isOn: $enabled)
-            .onChange(of: enabled) { _, on in
-                do { try LoginItem.set(on); error = nil } catch { self.error = error.localizedDescription }
-            }
-        if LoginItem.needsApproval {
+        Toggle("Open at login", isOn: Binding(get: { on }, set: { newValue in
+            do { try LoginItem.set(newValue); error = nil } catch { self.error = error.localizedDescription }
+            refresh()
+        }))
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+        if needsApproval {
             LabeledContent("Allow Parlo in Login Items to finish") {
                 Button("Open Settings") { LoginItem.openSystemSettings() }
             }
@@ -84,6 +86,12 @@ private struct LoginItemToggle: View {
         if let error {
             Text(error).font(.caption).foregroundStyle(.red)
         }
+    }
+
+    /// The user can approve or remove the login item in System Settings while this is open.
+    private func refresh() {
+        on = LoginItem.isOn
+        needsApproval = LoginItem.needsApproval
     }
 }
 

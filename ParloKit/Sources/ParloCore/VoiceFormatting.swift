@@ -16,8 +16,11 @@ public enum VoiceFormatting {
             .sorted { $0.count > $1.count }
             .map { $0.split(separator: " ").map { NSRegularExpression.escapedPattern(for: String($0)) }.joined(separator: "\\s+") }
             .joined(separator: "|")
+        // A preposition or article after the phrase means it's a normal phrase: "a capo del progetto",
+        // ", a capo dell'ufficio,", "new line of products".
+        let normalUse = "(?!\\s+(?:(?:del|della|dello|dei|degli|delle|di|of|for)(?![\\p{L}])|dell['’]|d['’]))"
         // 1: punctuation before the phrase (or none at the start), 2: the phrase.
-        let pattern = "(?:^|([.!?:,;]))\\s*(" + alternatives + ")(?![\\p{L}\\p{N}_])[\\s,.;:]*"
+        let pattern = "(?:^|([.!?:,;]))\\s*(" + alternatives + ")(?![\\p{L}\\p{N}_])" + normalUse + "[\\s,.;:]*"
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 

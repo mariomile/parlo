@@ -101,12 +101,19 @@ public final class DictationHistory: Sendable {
         return entry
     }
 
-    public func update(_ id: String, status: HistoryEntry.Status, text: String?, selection: String? = nil) {
+    public func update(_ id: String, status: HistoryEntry.Status, text: String?) {
         var all = writableEntries()
         guard let i = all.firstIndex(where: { $0.id == id }) else { return }
         all[i].status = status
         if let text { all[i].text = text }
-        if let selection { all[i].selection = selection }
+        try? save(all)
+    }
+
+    /// Saves the text a command was applied to, so Retry can apply it again.
+    public func setSelection(_ id: String, _ selection: String) {
+        var all = writableEntries()
+        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
+        all[i].selection = selection
         try? save(all)
     }
 
