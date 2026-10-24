@@ -39,4 +39,10 @@ import Testing
         let e = [DictionaryEntry(term: "X", heardAs: ["", "  "])]
         #expect(DictionaryReplacer.apply("hello", entries: e) == "hello")
     }
+
+    @Test func termWithItsOwnSpellingFixesCase() {
+        let e = [DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "GitHub"), DictionaryEntry(term: "Parlo")]
+        #expect(DictionaryReplacer.apply("Apri Claude.md su github", entries: e) == "Apri CLAUDE.md su GitHub")
+        #expect(DictionaryReplacer.apply("Io parlo piano", entries: e) == "Io parlo piano")
+    }
 }
