@@ -139,8 +139,7 @@ private struct HistoryRow: View {
 
     var body: some View {
         let label = entry.statusLine
-        return
-        HStack(alignment: .top, spacing: 10) {
+        return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(label.text)
                     .font(.system(size: 13))

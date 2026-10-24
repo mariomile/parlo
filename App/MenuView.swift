@@ -309,8 +309,7 @@ private struct RecentRow: View {
 
     var body: some View {
         let label = entry.statusLine
-        return
-        HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label.text)
                     .font(.system(size: 12.5))

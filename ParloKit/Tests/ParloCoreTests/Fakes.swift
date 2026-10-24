@@ -25,10 +25,14 @@ struct FakeSpeechDetector: SpeechDetector {
     func containsSpeech(_ samples: [Float]) async throws -> Bool { speech }
 }
 
-/// Never answers, like a detector stuck in its model.
+/// Never answers and ignores cancellation, like a detector stuck in its model: the deadline has to give up on it.
+/// A cancelled `Task.sleep` returns at once, so retrying one would spin; this waits on a timer cancellation can't reach.
 struct StalledSpeechDetector: SpeechDetector {
     func containsSpeech(_ samples: [Float]) async throws -> Bool {
-        while true { try? await Task.sleep(for: .seconds(1)) }
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3600) { continuation.resume() }
+        }
+        return false
     }
 }
 

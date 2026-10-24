@@ -85,10 +85,15 @@ struct EngineIntegrationTests {
         ]
         // The CTC model loads in the background after the first dictation that has a dictionary.
         let warmup = try Self.speech("Aggiorna il file CLAUDE.md", voice: "Alice")
-        for _ in 0..<60 where try await !transcriber.transcribe(warmup, languageCode: "it", dictionary: dictionary)
-            .contains("CLAUDE.md") {
+        // Otherwise the warmup would pass before the vocabulary model is there.
+        try #require(try await !transcriber.transcribe(warmup, languageCode: "it", dictionary: []).contains("CLAUDE.md"))
+        var ready = false
+        for _ in 0..<60 {
+            ready = try await transcriber.transcribe(warmup, languageCode: "it", dictionary: dictionary).contains("CLAUDE.md")
+            if ready { break }
             try await Task.sleep(for: .seconds(1))
         }
+        try #require(ready, "the vocabulary model never loaded")
         for (phrase, expected) in [
             ("Aggiorna il file CLAUDE.md e apri una pull request", ["CLAUDE.md", "pull request"]),
             ("Modifica CLAUDE.md o AGENTS.md prima del commit", ["CLAUDE.md", "AGENTS.md"]),
@@ -99,6 +104,8 @@ struct EngineIntegrationTests {
             print("[parakeetV3] without vocabulary: \(without)")
             print("[parakeetV3] with vocabulary:    \(with)")
             for term in expected { #expect(with.contains(term), "\(with)") }
+            // Otherwise the phrase proves nothing about the vocabulary.
+            #expect(expected.contains { !without.contains($0) }, "\(without)")
         }
     }
 

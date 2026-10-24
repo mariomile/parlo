@@ -120,6 +120,24 @@ import Testing
         #expect(history.saveError != nil)
     }
 
+    @Test func entryWithoutRecordingIsDeletedEvenWhenFilesCannotBeRemoved() throws {
+        let history = DictationHistory(directory: dir)
+        let file = history.addFile(URL(fileURLWithPath: "talk.m4a"), duration: 3)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        history.delete(file.id)
+        #expect(history.entries.isEmpty)
+    }
+
+    @Test func deleteRemovesARecordingPruningLeftBehind() throws {
+        let history = DictationHistory(directory: dir)
+        let entry = history.addFile(URL(fileURLWithPath: "talk.m4a"), duration: 3)
+        try WAV.encode([0.1]).write(to: history.audioURL(entry.id))
+        history.delete(entry.id)
+        #expect(!FileManager.default.fileExists(atPath: history.audioURL(entry.id).path))
+        #expect(DictationHistory(directory: dir).entries.isEmpty)
+    }
+
     @Test func recordingTheIndexNeverListedComesBack() throws {
         let history = DictationHistory(directory: dir)
         let listed = history.add(samples: [0.1], kind: .dictation, status: .done, date: Date(timeIntervalSince1970: 1)).entry
