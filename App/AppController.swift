@@ -504,16 +504,22 @@ final class AppController {
         if let state { hud.show(state) } else { hud.hide() }
     }
 
-    /// fn was combined with another key right away (fn+Delete, fn+arrow), or Esc while hands-free: drop the recording.
+    /// fn was combined with another key right away (fn+Delete, fn+arrow): drop the recording.
+    /// Esc while hands-free keeps the audio in Recent, untranscribed: it may be minutes of dictation.
     private func cancel() {
-        guard recording != nil, stopping == nil else { return }
+        guard let rec = recording, stopping == nil else { return }
         preview.stop()
         levelTimer?.invalidate()
         levelTimer = nil
-        _ = recorder.stop()
+        let samples = recorder.stop()
         recording = nil
         updatePhase()
-        hud.hide()
+        guard rec.locked, RecordingGuard.isLongEnough(sampleCount: samples.count),
+              let entry = try? history.add(samples: samples, command: rec.command)
+        else { return hud.hide() }
+        history.update(entry.id, status: .failed("Cancelled"), text: nil)
+        recent = history.entries()
+        hud.show(.message("Cancelled. The audio is kept in Recent if you need it.", isError: false))
     }
 
     /// The microphone stopped mid-recording and could not restart: keep what was captured.
