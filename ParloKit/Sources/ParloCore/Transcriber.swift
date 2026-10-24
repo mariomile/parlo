@@ -32,7 +32,7 @@ public enum TranscriptionError: Error, Equatable, LocalizedError {
 public enum RecordingGuard {
     public static let minimumDuration = 0.3
 
-    public static func isLongEnough(sampleCount: Int, sampleRate: Double = 16_000) -> Bool {
-        Double(sampleCount) / sampleRate >= minimumDuration - 1e-9
+    public static func isLongEnough(sampleCount: Int) -> Bool {
+        Audio.seconds(sampleCount) >= minimumDuration - 1e-9
     }
 }

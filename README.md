@@ -2,12 +2,17 @@
 
 Voice dictation for macOS, in the style of FluidVoice and Wispr Flow. Hold **fn**, speak, release: Parlo transcribes on this Mac, optionally cleans the text up with an LLM, and pastes it into whatever field has focus, in any app.
 
-- **Local transcription** with a downloadable model catalog: Apple Speech (built in), Parakeet v3 / Ultra / Redux / v2, Cohere Transcribe, Nemotron Multilingual, Whisper tiny → large-v3-turbo.
-- **AI cleanup** (optional) with Apple Intelligence on-device, or any OpenAI-compatible endpoint: Groq, OpenAI, OpenRouter, local Ollama. Removes fillers, fixes punctuation and self-corrections.
+- **Local transcription** with a downloadable model catalog: Apple Speech (built in), Parakeet v3 / Ultra / Redux / v2, Qwen3-ASR, Cohere Transcribe, Nemotron Multilingual, Whisper tiny → large-v3-turbo.
+- **AI cleanup** (optional) with Apple Intelligence on-device, Qwen3 4B running inside Parlo (MLX, no key, ~2.3 GB download), or any OpenAI-compatible endpoint: Groq, OpenAI, OpenRouter, local Ollama. Removes fillers, fixes punctuation and self-corrections.
+- **Hands-free**: double-tap **fn** to keep recording without holding it; press fn again to stop, Esc to cancel (the audio stays in Recent).
+- **Live text** in the notch while you speak, with the faster models.
+- **Spoken layout**: say "a capo" / "new line", "nuovo paragrafo" / "new paragraph", "punto elenco" / "bullet point" after a pause.
 - **Per-app tone**: formal in Mail, casual in Slack, technical in Cursor/Xcode/Terminal. Editable.
-- **Personal dictionary**: "heard as → write as" replacements, plus terms the AI must spell exactly.
+- **Personal dictionary**: "heard as → write as" replacements, plus terms the AI must spell exactly. Qwen3-ASR also gets the terms as hints. When you fix a word right after a paste, Parlo offers to add it.
 - **Voice snippets**: say a trigger phrase, get saved text, alone or mid-sentence.
 - **Command mode**: hold **ctrl**, then **fn**, and say an instruction. It rewrites the selected text, or generates new text when nothing is selected. Needs AI cleanup configured.
+- **History**: every dictation's text, searchable, with stats, re-paste and Markdown export. Audio of the last 20 is kept for retry.
+- **Transcribe a file**: drop any audio file macOS can read on the History window.
 
 Design: [`docs/superpowers/specs/2026-10-23-parlo-design.md`](docs/superpowers/specs/2026-10-23-parlo-design.md).
 
@@ -29,7 +34,8 @@ The welcome window walks through:
 
 1. **Microphone**, **Accessibility** (to paste), **Input Monitoring** (to see the fn key). Grant all three.
 2. **System Settings → Keyboard → Press 🌐 key to: Do Nothing**, so fn doesn't open the emoji picker.
-3. A speech model. Parakeet TDT v3 is recommended; if FluidVoice is installed it is probably already on disk.
+3. A speech model. Parakeet TDT v3 downloads on its own and Parlo switches to it when it's ready; until then it uses Apple Speech. If FluidVoice is installed it is probably already on disk.
+4. **Open Parlo at login**, on by default. Change it later in Settings → General.
 
 Reopen it any time from the menu: **Permissions & Setup…**
 
@@ -52,9 +58,13 @@ Settings → Models: download, cancel, delete, and pick the active one.
 
 Settings → AI (or **AI Cleanup** in the menu bar): turn it on and pick a provider. **Apple Intelligence** is the default: it runs on the Mac with no key, once Apple Intelligence is on in System Settings and its model has finished downloading. For a cloud or Ollama provider, pick a preset (or a custom OpenAI-compatible URL), set the model and API key, then **Test connection**. The key is stored in the macOS keychain. If the AI call fails or times out (5 s), Parlo pastes the raw transcript and says so: a dictation is never lost.
 
+## Pasting
+
+Parlo pastes with ⌘V and then puts your clipboard back. When nothing that takes text has focus (the desktop, a button, a list), it copies the text instead and says "press ⌘V". A transcription that hangs is stopped after 30 s plus the length of the recording, and the audio stays in Recent for Retry.
+
 ## Data
 
-Settings, styles, dictionary and snippets: `~/Library/Application Support/Parlo/settings.json`. Nothing leaves the Mac except the text sent to the AI provider you configure.
+Settings, styles, dictionary and snippets: `~/Library/Application Support/Parlo/settings.json`. History: `~/Library/Application Support/Parlo/History`. Nothing leaves the Mac except the text sent to the AI provider you configure.
 
 ## Tests
 

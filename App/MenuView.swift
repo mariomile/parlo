@@ -18,6 +18,10 @@ struct MenuView: View {
                 aiRow
             }
             .padding(6)
+            if !controller.suggestions.isEmpty {
+                Divider().opacity(0.5)
+                suggestionsSection
+            }
             if !controller.recent.isEmpty {
                 Divider().opacity(0.5)
                 recentSection
@@ -117,15 +121,46 @@ struct MenuView: View {
         .padding(.bottom, 4)
     }
 
-    // MARK: Recent
+    // MARK: Dictionary suggestions
 
-    private var recentSection: some View {
+    private var suggestionsSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("RECENT")
+            Text("ADD TO DICTIONARY?")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.6)
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, 8)
+            ForEach(controller.suggestions.prefix(3)) { entry in
+                SuggestionRow(
+                    entry: entry,
+                    add: { controller.acceptSuggestion(entry) },
+                    dismiss: { controller.dismissSuggestion(entry) }
+                )
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: Recent
+
+    private var recentSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("RECENT")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Show all") {
+                    controller.showHistory()
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
             ForEach(controller.recent.prefix(5)) { entry in
                 RecentRow(entry: entry, copy: { controller.copy(entry) }, retry: { controller.retry(entry) })
             }
@@ -160,6 +195,7 @@ struct MenuView: View {
     private var providerName: String {
         let llm = controller.settings.llm
         if llm.provider == .apple { return "Apple Intelligence, on this Mac" }
+        if llm.provider == .local { return "\(CleanupModel.displayName), on this Mac" }
         return URL(string: llm.baseURL)?.host().map { "\(llm.model) via \($0)" } ?? llm.model
     }
 
@@ -169,12 +205,7 @@ struct MenuView: View {
             return ("Finish setup: permissions missing", nil)
         }
         if Permissions.globeKeyConflicts { return ("Set “Press 🌐 key to” to Do Nothing", nil) }
-        if controller.aiNeedsKey { return ("AI cleanup needs an API key", .ai) }
-        if controller.settings.llm.enabled, controller.settings.llm.provider == .apple,
-           let reason = AppleIntelligenceClient.unavailableReason {
-            return ("Apple Intelligence: \(reason.lowercased())", .ai)
-        }
-        return nil
+        return controller.aiProblem.map { ($0, .ai) }
     }
 
     private func open(_ tab: SettingsTab) {
@@ -220,24 +251,41 @@ private struct Row<Accessory: View>: View {
     }
 }
 
+/// A word the user fixed after a paste, offered as a dictionary entry.
+private struct SuggestionRow: View {
+    let entry: DictionaryEntry
+    let add: () -> Void
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.term).font(.system(size: 12.5, weight: .medium))
+                Text(entry.heardAs.isEmpty ? "Spelling you used" : "Heard as “\(entry.heardAs.joined(separator: ", "))”")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Add", action: add).controlSize(.small)
+            Button(action: dismiss) { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .help("Not this one")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+}
+
 /// One saved dictation: its text, or why there is none, with copy and retry.
 private struct RecentRow: View {
     let entry: HistoryEntry
     let copy: () -> Void
     let retry: () -> Void
-    @State private var copied = false
     @State private var hovering = false
 
-    private var label: (text: String, dimmed: Bool) {
-        switch entry.status {
-        case .done: (entry.text ?? "", false)
-        case .processing: ("Transcribing…", true)
-        case .nothingHeard: ("Nothing heard", true)
-        case let .failed(reason): ("Failed: \(reason)", true)
-        }
-    }
-
     var body: some View {
+        let label = entry.statusLine
+        return
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label.text)
@@ -251,16 +299,10 @@ private struct RecentRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if entry.text != nil {
-                iconButton(copied ? "checkmark" : "doc.on.doc", help: "Copy") {
-                    copy()
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.2))
-                        copied = false
-                    }
-                }
+                CopyButton(copy: copy, label: icon)
+                    .buttonStyle(PressableStyle())
             }
-            if entry.status != .processing {
+            if entry.hasAudio && entry.status != .processing {
                 iconButton("arrow.clockwise", help: "Transcribe again and copy", action: retry)
             }
         }
@@ -270,15 +312,17 @@ private struct RecentRow: View {
         .onHover { hovering = $0 }
     }
 
-    private func iconButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 24, height: 24)
-                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(PressableStyle())
-        .help(help)
+    private func iconButton(_ name: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { icon(name) }
+            .buttonStyle(PressableStyle())
+            .help(help)
+    }
+
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 24, height: 24)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
     }
 }
 

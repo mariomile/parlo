@@ -66,6 +66,14 @@ import Testing
         #expect(m.contains("<<<\nhey dude\n>>>"))
     }
 
+    @Test func commandPutsTextBeforeInstruction() throws {
+        let m = PromptBuilder.commandUserMessage(instruction: "rendilo formale", selection: "ci vediamo domani")
+        let text = try #require(m.range(of: "ci vediamo domani"))
+        let instruction = try #require(m.range(of: "Instruction: rendilo formale"))
+        #expect(text.lowerBound < instruction.lowerBound)
+        #expect(PromptBuilder.commandSystemPrompt().contains("same language as the text"))
+    }
+
     @Test func commandWithoutSelection() {
         let m = PromptBuilder.commandUserMessage(instruction: "write a haiku", selection: nil)
         #expect(m.contains("Instruction: write a haiku"))

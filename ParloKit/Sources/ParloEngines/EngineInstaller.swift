@@ -28,9 +28,15 @@ public struct EngineInstaller: ModelInstaller {
     }
 
     public func uninstall(_ id: ModelID) async throws {
-        if let dir = Self.directory(id), FileManager.default.fileExists(atPath: dir.path) {
-            try FileManager.default.removeItem(at: dir)
-        }
+        guard let dir = Self.directory(id) else { return }
+        try HubSnapshot.uninstall(dir)
+    }
+
+    /// Run once at launch, before any model loads or downloads.
+    public static func prepare() {
+        // Files left by a download Parlo quit in the middle of.
+        HubSnapshot.removeLeftovers()
+        MLXCache.limit()
     }
 
     /// Where a model's files live; nil for models macOS manages.

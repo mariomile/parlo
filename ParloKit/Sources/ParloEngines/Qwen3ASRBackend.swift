@@ -1,5 +1,4 @@
 import Foundation
-import HuggingFace
 import MLX
 import MLXAudioSTT
 import ParloCore
@@ -8,39 +7,11 @@ import ParloCore
 enum Qwen3ASRBackend {
     static let repo = "mlx-community/Qwen3-ASR-1.7B-4bit"
 
-    static var directory: URL {
-        SettingsStore.appSupportDirectory.appendingPathComponent("Models/qwen3-asr-1.7b-4bit", isDirectory: true)
-    }
-
-    /// Downloads land here first and move to `directory` when complete, so a half-finished download never counts as installed.
-    private static var partialDirectory: URL {
-        directory.deletingLastPathComponent().appendingPathComponent("qwen3-asr-1.7b-4bit.partial", isDirectory: true)
-    }
-
-    static var isInstalled: Bool {
-        ["config.json", "model.safetensors", "vocab.json", "merges.txt"].allSatisfy {
-            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
-        }
-    }
-
-    /// The Hub client copies a snapshot out of its cache, so the cache lives next to the download and is deleted afterwards.
-    private static var scratchCache: URL {
-        directory.deletingLastPathComponent().appendingPathComponent("qwen3-asr-1.7b-4bit.cache", isDirectory: true)
-    }
+    static var directory: URL { HubSnapshot.directory("qwen3-asr-1.7b-4bit") }
+    static var isInstalled: Bool { HubSnapshot.isInstalled(directory) }
 
     static func install(progress: @escaping @Sendable (Double) -> Void) async throws {
-        let fm = FileManager.default
-        try fm.createDirectory(at: partialDirectory, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: scratchCache) }
-        let client = HubClient(cache: HubCache(cacheDirectory: scratchCache))
-        _ = try await client.downloadSnapshot(
-            of: Repo.ID(rawValue: repo)!,
-            to: partialDirectory,
-            matching: ["*.safetensors", "*.json", "*.txt"]
-        ) { progress($0.fractionCompleted) }
-        try Task.checkCancellation()
-        if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
-        try fm.moveItem(at: partialDirectory, to: directory)
+        try await HubSnapshot.install(repo, to: directory, matching: ["*.safetensors", "*.json", "*.txt"], progress: progress)
     }
 
     static func makeTranscriber() async throws -> any Transcriber {
@@ -55,6 +26,11 @@ actor Qwen3ASRTranscriber: Transcriber {
         self.model = model
     }
 
+    /// Switching model or reloading drops this transcriber: return the buffers MLX kept for it.
+    deinit {
+        Memory.clearCache()
+    }
+
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
         var language: String?
         if let languageCode {
@@ -62,9 +38,11 @@ actor Qwen3ASRTranscriber: Transcriber {
             guard let name = language, model.config.supportLanguages.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
             else { throw TranscriptionError.unsupportedLanguage(languageCode) }
         }
-        // The dictionary is ignored: the model has no vocabulary API, and passing terms as prompt context did not make
-        // it spell them (measured on "CLAUDE.md" / "AGENTS.md").
-        let output = model.generate(audio: MLXArray(samples), language: language)
+        // Qwen3-ASR reads the system turn as context. Labelled terms there make it write most of them, though not
+        // always with the same capitals ("Claude.md" for "CLAUDE.md"); a bare list worked less often.
+        let terms = dictionary.terms
+        let context = terms.isEmpty ? "" : "Vocabulary: " + terms.joined(separator: ", ")
+        let output = model.generate(audio: MLXArray(samples), context: context, language: language)
         return output.text
     }
 }

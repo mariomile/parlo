@@ -1,118 +1,85 @@
 import Foundation
 import Observation
 
-public enum ModelState: Equatable, Sendable {
-    case notInstalled
-    case downloading(Double)
-    case installed
-    case failed(String)
-}
-
 /// Install state of every catalog model, the active model, and a warm transcriber for it.
 @MainActor @Observable
 public final class ModelManager {
-    public private(set) var states: [ModelID: ModelState]
+    public let files: [ModelID: Installable]
     public private(set) var activeModelID: ModelID
 
     private let installer: any ModelInstaller
     private let onActiveChange: (ModelID) -> Void
-    private var downloads: [ModelID: Task<Void, Never>] = [:]
-    /// The active model's transcriber, loaded once; concurrent callers share the same load.
-    private var cached: (id: ModelID, load: Task<any Transcriber, any Error>)?
+    /// The active model's transcriber, loaded once.
+    private let loaded = SharedLoad<ModelID, any Transcriber>()
 
     public init(installer: any ModelInstaller, activeModelID: ModelID, onActiveChange: @escaping (ModelID) -> Void) {
         self.installer = installer
         self.activeModelID = activeModelID
         self.onActiveChange = onActiveChange
-        states = Dictionary(uniqueKeysWithValues: ModelID.allCases.map { ($0, ModelState.notInstalled) })
-        states[.appleSpeech] = .installed
+        files = Dictionary(uniqueKeysWithValues: ModelID.allCases.map { id in
+            let builtIn = !ModelCatalog.info(id).needsDownload
+            return (id, Installable(
+                state: builtIn ? .installed : .notInstalled,
+                isInstalled: { await installer.isInstalled(id) },
+                install: { try await installer.install(id, progress: $0) },
+                uninstall: { try await installer.uninstall(id) }
+            ))
+        })
     }
 
+    public var states: [ModelID: ModelState] { files.mapValues(\.state) }
     public var activeInfo: ModelInfo { ModelCatalog.info(activeModelID) }
 
     public func refresh() async {
-        for id in ModelID.allCases where downloads[id] == nil {
-            let installed = await installer.isInstalled(id)
-            // A download may have started while we were checking.
-            if downloads[id] == nil { states[id] = installed ? .installed : .notInstalled }
-        }
+        for id in ModelID.allCases { await files[id]!.refresh() }
         // Fall back for this session only: a model that briefly looks missing must not replace the saved choice.
-        if states[activeModelID] != .installed {
+        if files[activeModelID]!.state != .installed {
             activeModelID = .appleSpeech
-            cached = nil
+            loaded.clear()
         }
     }
 
     /// Returns when the download finishes, fails or is cancelled.
     public func download(_ id: ModelID) async {
-        if let existing = downloads[id] { return await existing.value }
-        states[id] = .downloading(0)
-        let installer = installer
-        let task = Task { [weak self] in
-            do {
-                try await installer.install(id) { fraction in
-                    Task { @MainActor in self?.updateProgress(id, fraction) }
-                }
-                try Task.checkCancellation()
-                self?.states[id] = .installed
-            } catch {
-                try? await installer.uninstall(id)
-                self?.states[id] = Task.isCancelled || error is CancellationError
-                    ? .notInstalled
-                    : .failed(error.localizedDescription)
-            }
-            self?.downloads[id] = nil
-        }
-        downloads[id] = task
-        await task.value
+        await files[id]!.download()
     }
 
     public func cancel(_ id: ModelID) {
-        downloads[id]?.cancel()
+        files[id]!.cancel()
     }
 
     public func delete(_ id: ModelID) async {
         guard ModelCatalog.info(id).needsDownload else { return }
-        cancel(id)
-        try? await installer.uninstall(id)
-        states[id] = .notInstalled
-        if cached?.id == id { cached = nil }
+        await files[id]!.delete()
         if activeModelID == id { setActive(.appleSpeech) }
     }
 
     public func select(_ id: ModelID) {
-        guard states[id] == .installed, id != activeModelID else { return }
+        guard files[id]!.state == .installed, id != activeModelID else { return }
         setActive(id)
     }
 
     /// Loads (once) and returns the transcriber for the active model.
     public func transcriber() async throws -> any Transcriber {
-        let id = activeModelID
-        if let cached, cached.id == id { return try await cached.load.value }
-        let installer = installer
-        let load = Task { try await installer.makeTranscriber(id) }
-        cached = (id, load)
-        do {
-            return try await load.value
-        } catch {
-            if cached?.id == id { cached = nil } // let the next dictation retry
-            throw error
-        }
+        let id = activeModelID, installer = installer
+        return try await loaded.value(id) { try await installer.makeTranscriber(id) }
+    }
+
+    /// Drops the loaded model and loads it again, after it stopped answering.
+    public func reload() {
+        loaded.clear()
+        warmUp()
     }
 
     /// Loads the active model in the background so the first dictation is fast.
     public func warmUp() {
-        Task { _ = try? await transcriber() }
+        let id = activeModelID, installer = installer
+        loaded.start(id) { try await installer.makeTranscriber(id) }
     }
 
     private func setActive(_ id: ModelID) {
         activeModelID = id
-        cached = nil
+        loaded.clear()
         onActiveChange(id)
-    }
-
-    private func updateProgress(_ id: ModelID, _ fraction: Double) {
-        guard case .downloading = states[id] else { return }
-        states[id] = .downloading(min(max(fraction, 0), 1))
     }
 }

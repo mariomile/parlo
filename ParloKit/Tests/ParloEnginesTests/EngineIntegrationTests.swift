@@ -6,6 +6,7 @@ import Testing
 
 /// Real-model tests. Run with `PARLO_INTEGRATION=1 swift test --filter EngineIntegrationTests`.
 /// Models not installed are skipped, unless listed in `PARLO_DOWNLOAD` (comma-separated ModelID raw values).
+/// The other model suites in this target use the same rule.
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["PARLO_INTEGRATION"] == "1"))
 struct EngineIntegrationTests {
     private final class TestBundleToken {}
@@ -19,6 +20,16 @@ struct EngineIntegrationTests {
     static let toDownload = Set(
         (ProcessInfo.processInfo.environment["PARLO_DOWNLOAD"] ?? "").split(separator: ",").map(String.init)
     )
+
+    /// An installer that has `id`: downloads it first when `PARLO_DOWNLOAD` lists it, otherwise skips the test.
+    static func installer(with id: ModelID) async throws -> EngineInstaller {
+        let installer = EngineInstaller()
+        if await installer.isInstalled(id) { return installer }
+        guard toDownload.contains(id.rawValue) else { try Test.cancel("\(id.rawValue) is not installed") }
+        try await installer.install(id) { _ in }
+        try #require(await installer.isInstalled(id))
+        return installer
+    }
 
     static func speech(_ text: String, voice: String) throws -> [Float] {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("parlo-\(UUID().uuidString).wav")
@@ -36,12 +47,7 @@ struct EngineIntegrationTests {
 
     @Test(arguments: ModelID.allCases)
     func transcribesItalianAndEnglish(id: ModelID) async throws {
-        let installer = EngineInstaller()
-        if !(await installer.isInstalled(id)) {
-            guard Self.toDownload.contains(id.rawValue) else { return }
-            try await installer.install(id) { _ in }
-            #expect(await installer.isInstalled(id))
-        }
+        let installer = try await Self.installer(with: id)
         let loadStart = ContinuousClock.now
         let transcriber = try await installer.makeTranscriber(id)
         print("[\(id.rawValue)] load: \(ContinuousClock.now - loadStart)")
@@ -61,7 +67,7 @@ struct EngineIntegrationTests {
         var rng = SystemRandomNumberGenerator()
         let noise = (0..<32_000).map { _ in Float.random(in: -0.018...0.018, using: &rng) }
         #expect(try await !detector.containsSpeech(noise))
-        #expect(try await !detector.containsSpeech([Float](repeating: 0, count: 16_000)))
+        #expect(try await !detector.containsSpeech([Float](repeating: 0, count: Audio.sampleRate)))
         let speech = try Self.speech("Allora, mandami il file entro stasera.", voice: "Alice")
         #expect(try await detector.containsSpeech(speech))
         // Quiet or distant speech, peaking around 0.05 like a soft voice on a MacBook mic.
@@ -72,8 +78,7 @@ struct EngineIntegrationTests {
     }
 
     @Test func parakeetVocabularyBiasing() async throws {
-        let installer = EngineInstaller()
-        guard await installer.isInstalled(.parakeetV3) else { return }
+        let installer = try await Self.installer(with: .parakeetV3)
         let transcriber = try await installer.makeTranscriber(.parakeetV3)
         let dictionary = [
             DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "AGENTS.md"), DictionaryEntry(term: "pull request"),
@@ -105,26 +110,23 @@ struct EngineIntegrationTests {
         do {
             result = try await transcriber.transcribe(samples, languageCode: language, dictionary: [])
         } catch let TranscriptionError.assetsInstalling(locale) {
-            print("[\(info.id.rawValue)] \(language): skipped, system assets for \(locale) not installed")
-            return
+            try Test.cancel("system assets for \(locale) not installed")
         }
         let wall = ContinuousClock.now - start
-        print("[\(info.id.rawValue)] \(language): \(result) (audio \(String(format: "%.2f", Double(samples.count) / 16_000)) s, wall \(wall))")
+        print("[\(info.id.rawValue)] \(language): \(result) (audio \(String(format: "%.2f", Audio.seconds(samples.count))) s, wall \(wall))")
         #expect(result.lowercased().contains(word), "\(info.displayName): \(result)")
     }
 
     @Test func cohereWithoutLanguageThrows() async throws {
-        let installer = EngineInstaller()
-        guard await installer.isInstalled(.cohereTranscribe) else { return }
+        let installer = try await Self.installer(with: .cohereTranscribe)
         let t = try await installer.makeTranscriber(.cohereTranscribe)
         await #expect(throws: TranscriptionError.languageRequired("Cohere Transcribe")) {
-            try await t.transcribe([Float](repeating: 0, count: 16_000), languageCode: nil, dictionary: [])
+            try await t.transcribe([Float](repeating: 0, count: Audio.sampleRate), languageCode: nil, dictionary: [])
         }
     }
 
     @Test func qwen3DetectsLanguageWhenNoneIsSet() async throws {
-        let installer = EngineInstaller()
-        guard await installer.isInstalled(.qwen3ASR) else { return }
+        let installer = try await Self.installer(with: .qwen3ASR)
         let t = try await installer.makeTranscriber(.qwen3ASR)
         let italian = try await t.transcribe(
             try Self.speech("Domani andiamo al mercato a comprare la frutta fresca.", voice: "Alice"),
@@ -132,5 +134,30 @@ struct EngineIntegrationTests {
         )
         print("[qwen3ASR] auto-detect: \(italian)")
         #expect(italian.lowercased().contains("mercato"), "\(italian)")
+    }
+
+    /// The dictionary goes to Qwen3-ASR as context. It may change the capitals, so the check ignores case.
+    @Test func qwen3UsesDictionaryAsContext() async throws {
+        let installer = try await Self.installer(with: .qwen3ASR)
+        let t = try await installer.makeTranscriber(.qwen3ASR)
+        let dictionary = [
+            DictionaryEntry(term: "CLAUDE.md"), DictionaryEntry(term: "AGENTS.md"), DictionaryEntry(term: "README"),
+        ]
+        for (phrase, voice, expected) in [
+            ("Aggiorna il file CLAUDE.md e apri una pull request", "Alice", ["claude.md"]),
+            ("Ho chiesto a Claude Code di sistemare il README", "Alice", ["readme"]),
+            ("Can you check the AGENTS.md file in the repo", "Samantha", ["agents.md"]),
+            ("Domani andiamo al mercato a comprare la frutta fresca.", "Alice", []),
+        ] {
+            let audio = try Self.speech(phrase, voice: voice)
+            let without = try await t.transcribe(audio, languageCode: nil, dictionary: [])
+            let with = try await t.transcribe(audio, languageCode: nil, dictionary: dictionary)
+            print("[qwen3ASR] without dictionary: \(without)")
+            print("[qwen3ASR] with dictionary:    \(with)")
+            for term in expected { #expect(with.lowercased().contains(term), "\(with)") }
+            if expected.isEmpty {
+                #expect(!dictionary.terms.contains { with.lowercased().contains($0.lowercased()) }, "\(with)")
+            }
+        }
     }
 }

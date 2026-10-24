@@ -29,6 +29,15 @@ import Testing
         #expect(store.load() == s)
     }
 
+    @Test func localProviderRoundTrips() throws {
+        let store = SettingsStore(directory: dir)
+        var s = AppSettings.default
+        s.llm.enabled = true
+        s.llm.provider = .local
+        try store.save(s)
+        #expect(store.load().llm.provider == .local)
+    }
+
     @Test func corruptFileIsQuarantined() throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("settings.json")

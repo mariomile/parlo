@@ -1,7 +1,15 @@
 import Foundation
+import Observation
 
-/// One dictation as it was recorded, kept so a failed transcription or a lost paste is never unrecoverable.
+/// One dictation, command or transcribed file as it was recorded, kept so a failed transcription or a lost paste is never unrecoverable.
 public struct HistoryEntry: Codable, Equatable, Identifiable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        case dictation
+        /// `selection`: the text the command was applied to, so Retry can apply it again.
+        case command(selection: String?)
+        case file(name: String)
+    }
+
     public enum Status: Codable, Equatable, Sendable {
         case processing
         case done
@@ -12,19 +20,94 @@ public struct HistoryEntry: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let date: Date
     public let duration: Double
-    public let command: Bool
+    public var kind: Kind
     public var status: Status
     public var text: String?
+    /// False once the audio was pruned (or for a transcribed file): the entry keeps its text but can't be retried.
+    public var hasAudio: Bool
+
+    public init(
+        id: String, date: Date, duration: Double, kind: Kind, status: Status, text: String? = nil, hasAudio: Bool = true
+    ) {
+        self.id = id
+        self.date = date
+        self.duration = duration
+        self.kind = kind
+        self.status = status
+        self.text = text
+        self.hasAudio = hasAudio
+    }
+
+    public var isCommand: Bool {
+        if case .command = kind { true } else { false }
+    }
+
+    /// "Dictation", "Command" or "File: memo.m4a".
+    public var label: String {
+        switch kind {
+        case .dictation: "Dictation"
+        case .command: "Command"
+        case let .file(name): "File: \(name)"
+        }
+    }
+
+    // The index keeps the flat keys it always had, so history written by any version still loads.
+    private enum CodingKeys: String, CodingKey {
+        case id, date, duration, command, status, text, hasAudio, fileName, selection
+    }
+
+    /// Index files written before text-only entries existed have no `hasAudio`: all of those kept their audio.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        date = try c.decode(Date.self, forKey: .date)
+        duration = try c.decode(Double.self, forKey: .duration)
+        status = try c.decode(Status.self, forKey: .status)
+        text = try c.decodeIfPresent(String.self, forKey: .text)
+        hasAudio = try c.decodeIfPresent(Bool.self, forKey: .hasAudio) ?? true
+        if let name = try c.decodeIfPresent(String.self, forKey: .fileName) {
+            kind = .file(name: name)
+        } else if try c.decode(Bool.self, forKey: .command) {
+            kind = .command(selection: try c.decodeIfPresent(String.self, forKey: .selection))
+        } else {
+            kind = .dictation
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(date, forKey: .date)
+        try c.encode(duration, forKey: .duration)
+        try c.encode(isCommand, forKey: .command)
+        try c.encode(status, forKey: .status)
+        try c.encodeIfPresent(text, forKey: .text)
+        try c.encode(hasAudio, forKey: .hasAudio)
+        switch kind {
+        case .dictation: break
+        case let .command(selection): try c.encodeIfPresent(selection, forKey: .selection)
+        case let .file(name): try c.encode(name, forKey: .fileName)
+        }
+    }
 }
 
-/// The last `limit` recordings on disk: 16 kHz mono float WAV plus a JSON index.
-public final class DictationHistory: Sendable {
+/// Every dictation's text (up to `textLimit`) in a JSON index, plus the audio of the newest `audioLimit`
+/// as 16 kHz mono float WAV files, for retry. The index is read once; `entries` is what it holds now.
+@MainActor @Observable
+public final class DictationHistory {
     public let directory: URL
-    public let limit: Int
+    public let audioLimit: Int
+    public let textLimit: Int
+    /// Newest first.
+    public private(set) var entries: [HistoryEntry]
+    /// The index on disk could not be fully read: the first write backs it up and puts orphaned recordings back.
+    private var damaged: Bool
 
-    public init(directory: URL, limit: Int = 20) {
+    public init(directory: URL, audioLimit: Int = 20, textLimit: Int = 2000) {
         self.directory = directory
-        self.limit = limit
+        self.audioLimit = audioLimit
+        self.textLimit = textLimit
+        (entries, damaged) = Self.readIndex(directory.appending(path: "history.json"))
     }
 
     public static var appSupportDirectory: URL {
@@ -35,54 +118,141 @@ public final class DictationHistory: Sendable {
 
     public func audioURL(_ id: String) -> URL { directory.appending(path: "\(id).wav") }
 
-    /// Newest first.
-    public func entries() -> [HistoryEntry] {
-        guard let data = try? Data(contentsOf: indexURL) else { return [] }
-        return (try? JSONDecoder().decode([HistoryEntry].self, from: data)) ?? []
+    /// Writes the audio before anything else touches it, then prunes old audio and old entries.
+    /// The entry is kept even when the disk refuses the audio: it just can't be retried. `audioError` says why.
+    @discardableResult
+    public func add(
+        samples: [Float], kind: HistoryEntry.Kind, status: HistoryEntry.Status = .processing, date: Date = .now
+    ) -> (entry: HistoryEntry, audioError: (any Error)?) {
+        let id = Self.id(for: date)
+        var audioError: (any Error)?
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try WAV.encode(samples).write(to: audioURL(id), options: .atomic)
+        } catch {
+            audioError = error
+        }
+        let entry = HistoryEntry(
+            id: id, date: date, duration: Audio.seconds(samples.count), kind: kind, status: status, hasAudio: audioError == nil
+        )
+        insert(entry)
+        return (entry, audioError)
     }
 
-    /// Writes the audio before anything else touches it, then drops the oldest entries past `limit`.
+    /// A transcribed audio file: text only, the file itself stays where it is.
     @discardableResult
-    public func add(samples: [Float], command: Bool, date: Date = .now) throws -> HistoryEntry {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let id = Self.id(for: date)
-        try WAV.encode(samples).write(to: audioURL(id), options: .atomic)
+    public func addFile(name: String, duration: Double, date: Date = .now) -> HistoryEntry {
         let entry = HistoryEntry(
-            id: id, date: date, duration: Double(samples.count) / 16_000, command: command, status: .processing
+            id: Self.id(for: date), date: date, duration: duration, kind: .file(name: name), status: .processing,
+            hasAudio: false
         )
-        var all = [entry] + entries()
-        while all.count > limit {
-            // Recordings that never produced text are the ones worth keeping longest.
-            let i = all.lastIndex { $0.status == .done } ?? all.count - 1
-            try? FileManager.default.removeItem(at: audioURL(all[i].id))
-            all.remove(at: i)
-        }
-        try save(all)
+        insert(entry)
         return entry
     }
 
     public func update(_ id: String, status: HistoryEntry.Status, text: String?) {
-        var all = entries()
-        guard let i = all.firstIndex(where: { $0.id == id }) else { return }
-        all[i].status = status
-        if let text { all[i].text = text }
-        try? save(all)
+        mutate(id) {
+            $0.status = status
+            if let text { $0.text = text }
+        }
     }
 
-    /// Entries left transcribing by a quit or crash become retryable failures.
+    /// Saves the text a command was applied to, so Retry can apply it again.
+    public func setSelection(_ id: String, _ selection: String) {
+        mutate(id) { if $0.isCommand { $0.kind = .command(selection: selection) } }
+    }
+
+    public func delete(_ id: String) {
+        try? FileManager.default.removeItem(at: audioURL(id))
+        write { $0.removeAll { $0.id == id } }
+    }
+
+    /// Entries left transcribing by a quit or crash become failures, retryable when they still have audio.
     public func markInterrupted() {
-        var all = entries()
-        guard all.contains(where: { $0.status == .processing }) else { return }
-        for i in all.indices where all[i].status == .processing { all[i].status = .failed("Interrupted") }
-        try? save(all)
+        guard entries.contains(where: { $0.status == .processing }) else { return }
+        write { all in
+            for i in all.indices where all[i].status == .processing { all[i].status = .failed("Interrupted") }
+        }
     }
 
     public func samples(_ id: String) -> [Float]? {
         (try? Data(contentsOf: audioURL(id))).flatMap(WAV.decode)
     }
 
-    private func save(_ all: [HistoryEntry]) throws {
-        try JSONEncoder().encode(all).write(to: indexURL, options: .atomic)
+    // MARK: - Index
+
+    private func mutate(_ id: String, _ change: (inout HistoryEntry) -> Void) {
+        guard entries.contains(where: { $0.id == id }) else { return }
+        write { all in
+            if let i = all.firstIndex(where: { $0.id == id }) { change(&all[i]) }
+        }
+    }
+
+    private func insert(_ entry: HistoryEntry) {
+        write(adding: entry.id) { all in
+            all.insert(entry, at: 0)
+            while all.filter(\.hasAudio).count > audioLimit {
+                // Recordings that never produced text are the ones worth keeping longest.
+                let i = all.lastIndex { $0.hasAudio && $0.status == .done } ?? all.lastIndex { $0.hasAudio }!
+                try? FileManager.default.removeItem(at: audioURL(all[i].id))
+                all[i].hasAudio = false
+                if all[i].text == nil { all.remove(at: i) }
+            }
+            while all.count > textLimit {
+                try? FileManager.default.removeItem(at: audioURL(all.removeLast().id))
+            }
+        }
+    }
+
+    /// Every change goes through here. A save that fails keeps the change in memory for the next one to write.
+    /// `newID`: an entry being added, whose audio is already on disk.
+    private func write(adding newID: String? = nil, _ change: (inout [HistoryEntry]) -> Void) {
+        var all = entries
+        if damaged { all = recoverDamagedIndex(all, besides: newID) }
+        change(&all)
+        entries = all
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(all).write(to: indexURL, options: .atomic)
+            damaged = false
+        } catch {}
+    }
+
+    /// One malformed entry must not take the others with it.
+    private struct Lossy: Decodable {
+        let entry: HistoryEntry?
+        init(from decoder: any Decoder) { entry = try? HistoryEntry(from: decoder) }
+    }
+
+    /// `damaged`: the index could not be read as a whole, or some entries in it could not be decoded.
+    private static func readIndex(_ url: URL) -> (entries: [HistoryEntry], damaged: Bool) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return ([], false) }
+        guard let data = try? Data(contentsOf: url), let items = try? JSONDecoder().decode([Lossy].self, from: data)
+        else { return ([], true) }
+        let entries = items.compactMap(\.entry)
+        return (entries, entries.count != items.count)
+    }
+
+    /// Copies the damaged index aside, and puts back recordings it no longer lists as failed entries,
+    /// so saving never orphans audio.
+    private func recoverDamagedIndex(_ entries: [HistoryEntry], besides newID: String?) -> [HistoryEntry] {
+        let backup = directory.appending(path: "history.damaged-\(Self.id(for: .now)).json")
+        try? FileManager.default.copyItem(at: indexURL, to: backup)
+        let known = Set(entries.map(\.id) + [newID].compactMap { $0 })
+        return (entries + orphanedRecordings(known: known)).sorted { $0.date > $1.date }
+    }
+
+    private func orphanedRecordings(known: Set<String>) -> [HistoryEntry] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.compactMap { url in
+            let id = url.deletingPathExtension().lastPathComponent
+            guard url.pathExtension == "wav", !known.contains(id), let ms = Int64(id) else { return nil }
+            let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return HistoryEntry(
+                id: id, date: Date(timeIntervalSince1970: Double(ms) / 1000), duration: WAV.duration(byteCount: bytes),
+                kind: .dictation, status: .failed("Recovered from a damaged history file")
+            )
+        }
     }
 
     private static func id(for date: Date) -> String {
@@ -92,7 +262,7 @@ public final class DictationHistory: Sendable {
 
 /// 16 kHz mono 32-bit float WAV, readable by QuickTime and any audio tool.
 enum WAV {
-    static let sampleRate: UInt32 = 16_000
+    static let sampleRate = UInt32(Audio.sampleRate)
 
     static func encode(_ samples: [Float]) -> Data {
         let dataSize = UInt32(samples.count * 4)
@@ -109,8 +279,15 @@ enum WAV {
         return d
     }
 
+    static let headerSize = 44
+
+    /// Seconds of audio in a file of `byteCount` bytes written by `encode`.
+    static func duration(byteCount: Int) -> Double {
+        Audio.seconds(max(byteCount - headerSize, 0) / MemoryLayout<Float>.size)
+    }
+
     static func decode(_ data: Data) -> [Float]? {
-        guard data.count >= 44, data.prefix(4) == Data("RIFF".utf8) else { return nil }
-        return data.dropFirst(44).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        guard data.count >= headerSize, data.prefix(4) == Data("RIFF".utf8) else { return nil }
+        return data.dropFirst(headerSize).withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 }

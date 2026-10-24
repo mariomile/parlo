@@ -4,10 +4,7 @@ import Testing
 
 /// Runs against the real on-device model; skipped while Apple Intelligence isn't ready.
 @Test func appleIntelligenceCleansUpItalian() async throws {
-    if let reason = AppleIntelligenceClient.unavailableReason {
-        print("[appleIntelligence] skipped, \(reason)")
-        return
-    }
+    if let reason = AppleIntelligenceClient.unavailableReason { try Test.cancel("\(reason)") }
     let system = PromptBuilder.cleanupSystemPrompt(style: .neutral, dictionary: [], hasPlaceholders: false)
     let out = try await AppleIntelligenceClient().complete(
         system: system,

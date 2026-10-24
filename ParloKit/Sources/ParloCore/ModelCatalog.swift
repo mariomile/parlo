@@ -60,7 +60,7 @@ public enum ModelCatalog {
                   requiresExplicitLanguage: false),
         ModelInfo(id: .qwen3ASR, displayName: "Qwen3-ASR 1.7B", engine: .qwen3ASR, approxSizeMB: 1540,
                   languages: "30 languages, auto-detect", italian: 5, english: 5, speed: 3,
-                  note: "Most accurate in our tests. Doesn't use your dictionary words.",
+                  note: "Most accurate in our tests. Uses your dictionary words as hints.",
                   requiresExplicitLanguage: false),
         ModelInfo(id: .whisperTiny, displayName: "Whisper Tiny", engine: .whisperKit, approxSizeMB: 77,
                   languages: "99 languages", italian: 1, english: 2, speed: 5, note: "Fastest Whisper, lowest accuracy.",
@@ -93,4 +93,12 @@ public protocol ModelInstaller: Sendable {
     func install(_ id: ModelID, progress: @escaping @Sendable (Double) -> Void) async throws
     func uninstall(_ id: ModelID) async throws
     func makeTranscriber(_ id: ModelID) async throws -> any Transcriber
+}
+
+/// The on-device model for AI cleanup and command mode.
+public enum CleanupModel {
+    public static let repo = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+    public static let folder = "qwen3-4b-instruct-2507-4bit"
+    public static let displayName = "Qwen3 4B"
+    public static let sizeLabel = "~2.3 GB"
 }

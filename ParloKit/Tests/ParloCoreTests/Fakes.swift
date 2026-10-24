@@ -18,7 +18,7 @@ final class FakeLLM: ChatCompleting, @unchecked Sendable {
     }
 }
 
-let oneSecond = [Float](repeating: 0.1, count: 16_000)
+let oneSecond = [Float](repeating: 0.1, count: Audio.sampleRate)
 
 struct FakeSpeechDetector: SpeechDetector {
     var speech: Bool
