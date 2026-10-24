@@ -10,22 +10,26 @@ enum NemotronBackend {
         MLModelConfigurationUtils.defaultModelsDirectory(for: .nemotronMultilingual)
     }
 
-    static var directory: URL {
-        repoDirectory.appendingPathComponent("multilingual/\(chunkMs)ms", isDirectory: true)
-    }
+    /// FluidAudio's folder for the auto-language variant, relative to `repoDirectory`.
+    static let variant = "multilingual/\(chunkMs)ms"
 
-    /// Written once FluidAudio's download returns. Its files land straight in `directory` and it skips the
-    /// download whenever `metadata.json` is there, so the files alone can't tell a finished download from one cut short.
+    static var directory: URL { repoDirectory.appendingPathComponent(variant, isDirectory: true) }
+
+    /// Written once every file is in place. FluidAudio's own check only looks for `metadata.json`,
+    /// so it can't tell a finished download from one cut short.
     private static var completeMarker: URL { directory.appendingPathComponent(".parlo-complete") }
 
     static var isInstalled: Bool { FileManager.default.fileExists(atPath: completeMarker.path) }
 
-    /// Starts from an empty folder, so a download a quit or crash cut short is fetched again in full.
+    /// Fetches only the files that are missing: FluidAudio moves each file in place once it is complete, so the
+    /// files already there (from a download cut short, or from FluidVoice, which shares the folder) are kept.
     static func install(progress: @escaping @Sendable (Double) -> Void) async throws {
-        if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
-        _ = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
-            languageCode: "auto", chunkMs: chunkMs
-        ) { progress($0.fractionCompleted) }
+        try await ModelHub.download(
+            .nemotronMultilingual, subdirectory: variant, to: repoDirectory,
+            progressHandler: { progress($0.fractionCompleted) }, shouldSkip: { $0.contains(".mlpackage") }
+        )
+        // Now that `metadata.json` is there this downloads nothing: it only repairs a tokenizer cached before the fix.
+        _ = try await StreamingNemotronMultilingualAsrManager.downloadVariant(languageCode: "auto", chunkMs: chunkMs)
         try Data().write(to: completeMarker)
     }
 

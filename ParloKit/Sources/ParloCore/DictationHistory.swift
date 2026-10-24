@@ -183,12 +183,14 @@ public final class DictationHistory {
 
     /// A recording that can't be removed keeps its entry, so it is never left on disk unlisted.
     public func delete(_ id: String) {
-        do {
-            try FileManager.default.removeItem(at: audioURL(id))
-        } catch let error as CocoaError where error.code == .fileNoSuchFile {
-        } catch {
-            saveError = error.localizedDescription
-            return
+        if entries.first(where: { $0.id == id })?.hasAudio == true {
+            do {
+                try FileManager.default.removeItem(at: audioURL(id))
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+            } catch {
+                saveError = error.localizedDescription
+                return
+            }
         }
         write { $0.removeAll { $0.id == id } }
     }
