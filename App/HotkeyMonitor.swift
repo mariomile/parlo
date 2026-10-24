@@ -34,9 +34,11 @@ final class HotkeyMonitor {
         machine.reset()
     }
 
-    /// The keyboard says fn is up, though its release never reached the tap.
-    func fnIsUp() {
-        machine.fnIsUp()
+    /// Called while recording: catches a release the tap missed (it is switched off while the system is busy),
+    /// and stops a hands-free recording at its time limit.
+    func poll() {
+        let fnHeld = CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn)
+        if let action = machine.poll(fnHeld: fnHeld, at: ProcessInfo.processInfo.systemUptime) { onAction(action) }
     }
 
     /// `fromHardware` is false for synthetic events, like our own Cmd+C in command mode.

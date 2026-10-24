@@ -3,7 +3,7 @@ import ParloCore
 import ParloEngines
 import SwiftUI
 
-/// Owns app state and wires hotkey -> recorder -> pipeline -> paste / HUD.
+/// Owns app state and wires hotkey -> recording session -> transcription queue -> paste / HUD.
 @Observable
 final class AppController {
     enum Phase: Equatable { case idle, recording, processing }
@@ -24,11 +24,9 @@ final class AppController {
         }
     }
     private(set) var phase: Phase = .idle
-    /// Every kept entry, newest first, as on disk.
-    private(set) var recent: [HistoryEntry] = []
     private(set) var hotkeyActive = false
-    /// Words the user fixed right after a paste, offered for the dictionary. Newest first.
-    private(set) var suggestions: [DictionaryEntry] = []
+    /// Words the user fixed right after a paste, offered for the dictionary.
+    private(set) var inbox = SuggestionInbox()
     /// Progress (0 to 1) of audio files being transcribed, by history entry id. Absent while queued.
     private(set) var fileProgress: [String: Double] = [:]
     var settingsTab: SettingsTab = .general
@@ -37,43 +35,20 @@ final class AppController {
 
     private let store: SettingsStore
     private let hud = HUDController()
-    private let recorder = AudioRecorder()
     private let hotkey = HotkeyMonitor()
-    private let preview = LivePreviewer()
-    private struct Recording {
-        let command: Bool
-        let bundleID: String?
-        let selection: Task<String?, Never>?
-        let startedAt: Date
-        /// Set once the system reports fn held, so the stuck-key check can trust it.
-        var sawFnHeld = false
-        var fnUpTicks = 0
-        /// Hands-free after a double tap: fn is up while recording.
-        var locked = false
-    }
-
-    /// A forgotten hands-free recording stops here and is transcribed like any other.
-    private static let handsFreeLimit: TimeInterval = 10 * 60
-
-    private var recording: Recording?
-    /// The short wait after fn is released, before the microphone stops.
-    private var stopping: Task<Void, Never>?
-    /// Dictations are transcribed and pasted one at a time, in order, while new ones can already record.
-    private var queue: Task<Void, Never>?
-    private var pendingJobs = 0
     private let history = DictationHistory(directory: DictationHistory.appSupportDirectory)
-    private var levelTimer: Timer?
+    /// Dictations are transcribed and pasted one at a time, in order, while new ones can already record.
+    private let gate: TranscriberGate
+    private let session: RecordingSession
+    private let windows = Windows()
     private var tapRetryTimer: Timer?
-    private var onboardingWindow: NSWindow?
-    private var settingsWindow: NSWindow?
-    private var historyWindow: NSWindow?
     private let previousApp = PreviousAppTracker()
     /// Loaded at launch; until it is, recordings go straight to the transcriber.
     private var speechDetector: SileroSpeechDetector?
     /// Watches the field after a paste for a fixed word; see `watchForCorrection`.
     private var correctionWatch: Task<Void, Never>?
-    /// Terms the user said no to, not offered again until Parlo restarts.
-    private var dismissedSuggestions: Set<String> = []
+
+    private static let copiedHint = "Copied: press ⌘V to paste"
 
     init() {
         let store = SettingsStore(directory: SettingsStore.appSupportDirectory)
@@ -82,7 +57,10 @@ final class AppController {
         settings = loaded
         apiKey = KeychainStore.read()
         var onActiveChange: (ModelID) -> Void = { _ in }
-        models = ModelManager(installer: EngineInstaller(), activeModelID: loaded.activeModelID) { onActiveChange($0) }
+        let models = ModelManager(installer: EngineInstaller(), activeModelID: loaded.activeModelID) { onActiveChange($0) }
+        self.models = models
+        gate = TranscriberGate(transcriber: { try await models.transcriber() }, reload: { models.reload() })
+        session = RecordingSession(gate: gate)
         onActiveChange = { [weak self] id in
             self?.settings.activeModelID = id
             self?.models.warmUp()
@@ -91,9 +69,14 @@ final class AppController {
 
     func launch() {
         hotkey.onAction = { [weak self] action in self?.handle(action) }
-        recorder.onFailure = { [weak self] reason in self?.microphoneFailed(reason) }
+        gate.onChange = { [weak self] in self?.updatePhase() }
+        session.onTick = { [weak self] in
+            guard let self else { return }
+            hud.model.pushLevel(session.level)
+            hotkey.poll()
+        }
+        session.onFailure = { [weak self] reason in self?.microphoneFailed(reason) }
         history.markInterrupted()
-        recent = history.entries()
         EngineInstaller.prepare()
         startHotkey()
         Task {
@@ -144,6 +127,11 @@ final class AppController {
         }
     }
 
+    /// Every kept entry, newest first.
+    var recent: [HistoryEntry] { history.entries }
+
+    var suggestions: [DictionaryEntry] { inbox.pending }
+
     func copy(_ entry: HistoryEntry) {
         if let text = entry.text { copy(text) }
     }
@@ -160,7 +148,6 @@ final class AppController {
 
     func delete(_ entry: HistoryEntry) {
         history.delete(entry.id)
-        recent = history.entries()
     }
 
     /// Hides the History window, brings back the app that was in front before it, and pastes there.
@@ -168,16 +155,16 @@ final class AppController {
         guard let text = entry.text else { return }
         guard Permissions.accessibility, let app = previousApp.app, !app.isTerminated else {
             copy(text)
-            show(.message("Copied: press ⌘V to paste", isError: false))
+            show(.message(Self.copiedHint, isError: false))
             return
         }
-        historyWindow?.orderOut(nil)
+        windows.hide(.history)
         app.activate(from: .current, options: [])
         Task {
             for _ in 0..<25 where NSWorkspace.shared.frontmostApplication != app {
                 try? await Task.sleep(for: .milliseconds(40))
             }
-            await TextInserter.insert(text)
+            await deliver(text, warning: nil)
         }
     }
 
@@ -187,96 +174,42 @@ final class AppController {
         switch action {
         case .startDictation: begin(command: false)
         case .startCommand: begin(command: true)
-        case .stop: end()
-        case .cancel: cancel()
+        case .stop: session.stopAfterTail { [weak self] in self?.save($0) }
+        case let .cancel(handsFree): cancel(keepingAudio: handsFree)
         case let .lock(command): lock(command: command)
         }
+        updatePhase()
     }
 
     private func begin(command: Bool) {
         // Pressed again during the short wait after release: close the previous recording now,
         // and save it only once the new one is listening, so disk work doesn't clip its first word.
-        let previous = stopping != nil ? stopRecording() : nil
+        let previous = session.isStopping ? session.stop() : nil
         defer { if let previous { save(previous) } }
-        guard recording == nil else { return }
+        guard session.current == nil else { return }
         correctionWatch?.cancel()
         if let problem = blocker(command: command) {
             hud.show(.message(problem, isError: true))
             return
         }
+        // Display only: the pasted text comes from the job.
+        let show: (String) -> Void = { [weak self] text in self?.hud.model.liveText = text }
+        let preview = LivePreview.supports(models.activeInfo) ? (languageCode: settings.languageCode, show: show) : nil
         do {
-            try recorder.start(deviceUID: settings.microphoneUID)
+            try session.start(command: command, deviceUID: settings.microphoneUID, preview: preview)
         } catch {
             hud.show(.message(error.localizedDescription, isError: true))
             return
         }
-        recording = Recording(
-            command: command, bundleID: FrontmostApp.bundleID,
-            selection: command ? Task { await SelectionReader.read() } : nil, startedAt: .now
-        )
-        updatePhase()
         hud.show(.recording(command: command))
-        startPreview()
-        levelTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.hud.model.pushLevel(self.recorder.level)
-                self.checkFnStillHeld()
-                self.checkHandsFreeLimit()
-            }
-        }
     }
 
     /// Double tap: the recording the first tap started keeps going hands-free, or a new one starts if it already stopped.
     private func lock(command: Bool) {
-        if stopping != nil, recording?.command == command {
-            stopping?.cancel()
-            stopping = nil
-        } else {
-            begin(command: command)
-        }
+        if !session.continueRecording(command: command) { begin(command: command) }
         // Couldn't start (a blocker, or the microphone): don't leave the hotkey waiting to stop a hands-free recording.
-        guard recording != nil else { return hotkey.reset() }
-        recording?.locked = true
+        guard session.current != nil else { return hotkey.reset() }
         hud.model.handsFree = true
-    }
-
-    /// Shows the words recognized so far in the HUD. Display only: the pasted text comes from `process`.
-    private func startPreview() {
-        guard LivePreview.supports(models.activeInfo) else { return }
-        preview.start(
-            transcriber: { [weak self] in try? await self?.models.transcriber() },
-            languageCode: settings.languageCode,
-            samples: { [weak self] in self?.recorder.recentSamples($0) ?? [] },
-            isBusy: { [weak self] in (self?.pendingJobs ?? 0) > 0 },
-            show: { [weak self] text in
-                guard let self, recording != nil else { return }
-                hud.model.liveText = text
-            }
-        )
-    }
-
-    /// The event tap can miss fn's release (it is switched off while the system is busy). If the keyboard
-    /// says fn has been up for a while, stop as if it had been released. Hands-free, the missed release is
-    /// the second tap's: pass it on, or the press meant to stop the recording would be taken for it.
-    private func checkFnStillHeld() {
-        guard var rec = recording, stopping == nil else { return }
-        let held = CGEventSource.flagsState(.combinedSessionState).contains(.maskSecondaryFn)
-        if held { rec.sawFnHeld = true }
-        rec.fnUpTicks = held ? 0 : rec.fnUpTicks + 1
-        recording = rec
-        guard rec.fnUpTicks >= 15 else { return }
-        if rec.locked { return hotkey.fnIsUp() }
-        guard rec.sawFnHeld else { return }
-        hotkey.reset()
-        end()
-    }
-
-    private func checkHandsFreeLimit() {
-        guard let rec = recording, rec.locked, stopping == nil,
-              Date.now.timeIntervalSince(rec.startedAt) >= Self.handsFreeLimit else { return }
-        hotkey.reset()
-        end()
     }
 
     /// Why a dictation can't start right now, as a HUD message.
@@ -294,37 +227,14 @@ final class AppController {
         return nil
     }
 
-    private func end() {
-        guard recording != nil, stopping == nil else { return }
-        // Keep listening a moment: people let go of fn while still saying the last word.
-        stopping = Task {
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            // Cancelled after the sleep ended but before this resumed: a new recording may be running.
-            guard !Task.isCancelled else { return }
-            finishRecording()
-        }
-    }
-
-    /// Stops the microphone, saves the audio to history, then queues it for transcription.
+    /// Stops the microphone now, saves the audio to history, then queues it for transcription.
     private func finishRecording() {
-        if let finished = stopRecording() { save(finished) }
+        if let finished = session.stop() { save(finished) }
     }
 
-    private func stopRecording() -> (Recording, [Float])? {
-        stopping?.cancel()
-        stopping = nil
-        guard let rec = recording else { return nil }
-        preview.stop()
-        levelTimer?.invalidate()
-        levelTimer = nil
-        let samples = recorder.stop()
-        recording = nil
+    private func save(_ finished: RecordingSession.Finished) {
         updatePhase()
-        return (rec, samples)
-    }
-
-    private func save(_ finished: (Recording, [Float])) {
-        let (rec, samples) = finished
+        let rec = finished.recording, samples = finished.samples
         guard RecordingGuard.isLongEnough(sampleCount: samples.count) else {
             if Date.now.timeIntervalSince(rec.startedAt) > 1 {
                 show(.message("The microphone captured no audio. Check the input in Settings.", isError: true))
@@ -333,208 +243,135 @@ final class AppController {
             }
             return
         }
-        var entryID: String?
-        do {
-            entryID = try history.add(samples: samples, command: rec.command).id
-            recent = history.entries()
-            show(.processing(command: rec.command))
-        } catch {
-            show(.message("Couldn't save the recording: \(error.localizedDescription). Transcribing anyway.", isError: true))
-        }
+        let (entry, audioError) = history.add(samples: samples, kind: rec.command ? .command(selection: nil) : .dictation)
+        show(audioError.map { .message("Couldn't save the recording (\($0.localizedDescription)). Transcribing anyway.", isError: true) }
+            ?? .processing(command: rec.command))
         // Kept for Retry even if this job fails before it runs, or Parlo quits while it's queued.
-        if let entryID, let selection = rec.selection {
-            Task { if let text = await selection.value { history.setSelection(entryID, text) } }
+        if let selection = rec.selection {
+            Task { if let text = await selection.value { history.setSelection(entry.id, text) } }
         }
-        enqueue { [weak self] in await self?.process(samples, rec, entryID: entryID) }
-    }
-
-    private func enqueue(_ job: @escaping @MainActor () async -> Void) {
-        pendingJobs += 1
-        updatePhase()
-        let previous = queue
-        queue = Task {
-            await previous?.value
-            // A stuck preview holds the transcriber: load a fresh one for this job.
-            if await !preview.idle() { models.reload() }
-            await job()
-            pendingJobs -= 1
-            updatePhase()
+        let speech = speechDetector
+        enqueue(entry, via: .paste) { [weak self] transcriber in
+            let kind: JobKind = rec.command ? .command(selection: await rec.selection?.value) : .dictation(bundleID: rec.bundleID)
+            return try await self?.job(transcriber, speech: speech).run(samples, kind)
         }
-    }
-
-    private func process(_ samples: [Float], _ rec: Recording, entryID: String?) async {
-        let limit = Deadline.forAudio(duration: Double(samples.count) / 16_000)
-        do {
-            let transcriber = try await models.transcriber()
-            if rec.command {
-                let selection = await rec.selection?.value
-                let pipeline = CommandPipeline(
-                    transcriber: transcriber, llm: llm, languageCode: settings.languageCode,
-                    speech: speechDetector
-                )
-                let outcome = try await Deadline.run(seconds: limit) {
-                    try await pipeline.run(samples: samples, selection: selection)
-                }
-                switch outcome {
-                case .discarded: record(entryID, .nothingHeard); show(nil)
-                case .empty: record(entryID, .nothingHeard); show(.message(nothingHeard(entryID), isError: false))
-                case let .result(text): record(entryID, .done, text); await deliver(text, warning: nil)
-                }
-            } else {
-                let pipeline = DictationPipeline(
-                    transcriber: transcriber, llm: llm, settings: settings, speech: speechDetector
-                )
-                let bundleID = rec.bundleID
-                let outcome = try await Deadline.run(seconds: limit) {
-                    try await pipeline.run(samples: samples, bundleID: bundleID)
-                }
-                switch outcome {
-                case .discarded: record(entryID, .nothingHeard); show(nil)
-                case .empty: record(entryID, .nothingHeard); show(.message(nothingHeard(entryID), isError: false))
-                case let .inserted(text, cleanupError):
-                    record(entryID, .done, text)
-                    await deliver(text, warning: cleanupError.map { "Pasted without AI cleanup: \($0)" })
-                }
-            }
-        } catch {
-            if error is DeadlineExceeded { models.reload() }
-            record(entryID, .failed(error.localizedDescription))
-            let kept = entryID == nil ? "" : ". The audio is kept in Recent."
-            show(.message(error.localizedDescription + kept, isError: true))
-        }
-    }
-
-    private func nothingHeard(_ entryID: String?) -> String {
-        entryID == nil ? "Nothing heard" : "Nothing heard. The audio is kept in Recent."
     }
 
     /// Transcribes a saved recording again, without the speech check, and copies the result.
     /// A command is applied again to the text it was first applied to.
     func retry(_ entry: HistoryEntry) {
         guard let samples = history.samples(entry.id) else { return }
-        record(entry.id, .processing)
-        show(.processing(command: entry.command))
-        let limit = Deadline.forAudio(duration: entry.duration)
-        enqueue { [weak self] in
-            guard let self else { return }
-            do {
-                let transcriber = try await models.transcriber()
-                let text: String?
-                if entry.command {
-                    let pipeline = CommandPipeline(transcriber: transcriber, llm: llm, languageCode: settings.languageCode)
-                    let outcome = try await Deadline.run(seconds: limit) {
-                        try await pipeline.run(samples: samples, selection: entry.selection)
-                    }
-                    if case let .result(result) = outcome { text = result } else { text = nil }
-                } else {
-                    let pipeline = DictationPipeline(transcriber: transcriber, llm: llm, settings: settings)
-                    let outcome = try await Deadline.run(seconds: limit) {
-                        try await pipeline.run(samples: samples, bundleID: nil)
-                    }
-                    if case let .inserted(result, _) = outcome { text = result } else { text = nil }
-                }
-                guard let text else {
-                    record(entry.id, .nothingHeard)
-                    show(.message("Still nothing heard in that recording", isError: false))
-                    return
-                }
-                record(entry.id, .done, text)
-                copy(text)
-                show(.message("Copied: press ⌘V to paste", isError: false))
-            } catch {
-                if error is DeadlineExceeded { models.reload() }
-                record(entry.id, .failed(error.localizedDescription))
-                show(.message(error.localizedDescription, isError: true))
-            }
+        history.update(entry.id, status: .processing, text: nil)
+        show(.processing(command: entry.isCommand))
+        let kind: JobKind = if case let .command(selection) = entry.kind { .command(selection: selection) } else { .dictation(bundleID: nil) }
+        enqueue(entry, via: .copy) { [weak self] transcriber in
+            try await self?.job(transcriber, speech: nil).run(samples, kind)
         }
     }
 
     /// Transcribes an audio file with the active model and adds the result to History. Runs in the same queue as dictations.
     func transcribeFile(_ url: URL) {
-        let entry: HistoryEntry
-        do {
-            entry = try history.addFile(name: url.lastPathComponent, duration: AudioFileDecoder.duration(of: url))
-        } catch {
+        let name = url.lastPathComponent
+        let duration: Double
+        do { duration = try AudioFileDecoder.duration(of: url) } catch {
             show(.message(error.localizedDescription, isError: true))
             return
         }
-        recent = history.entries()
-        enqueue { [weak self] in await self?.processFile(url, entry) }
-    }
-
-    private func processFile(_ url: URL, _ entry: HistoryEntry) async {
-        fileProgress[entry.id] = 0
-        defer { fileProgress[entry.id] = nil }
-        let name = url.lastPathComponent
-        do {
-            let transcriber = try await models.transcriber()
-            let samples = try await AudioFileDecoder.decode(url)
+        let entry = history.addFile(name: name, duration: duration)
+        enqueue(entry, via: .file(name: name)) { [weak self] transcriber in
+            guard let self else { return nil }
             let id = entry.id
+            fileProgress[id] = 0
+            defer { fileProgress[id] = nil }
+            let samples = try await AudioFileDecoder.decode(url)
             let chunked = ChunkedTranscriber(base: transcriber) { [weak self] fraction in
-                Task { @MainActor in self?.fileProgress[id] = fraction }
+                // A chunk still running when the job failed reports after it: don't bring the entry back.
+                Task { @MainActor in if self?.fileProgress[id] != nil { self?.fileProgress[id] = fraction } }
             }
-            // AI cleanup is for a sentence or two, with a few seconds to answer.
-            let cleanup = entry.duration <= FileTranscription.cleanupMaxSeconds ? llm : nil
-            let outcome = try await DictationPipeline(transcriber: chunked, llm: cleanup, settings: settings)
-                .run(samples: samples, bundleID: nil)
-            guard case let .inserted(text, cleanupError) = outcome else {
-                record(entry.id, .nothingHeard)
-                show(.message("Nothing heard in \(name)", isError: false))
-                return
-            }
-            record(entry.id, .done, text)
-            let skipped = llm != nil && cleanup == nil ? " (AI cleanup skipped: long file)" : ""
-            show(cleanupError.map { .message("Transcribed \(name) without AI cleanup: \($0)", isError: true) }
-                ?? .message("Transcribed \(name)\(skipped)", isError: false))
-        } catch {
-            record(entry.id, .failed(error.localizedDescription))
-            show(.message(error.localizedDescription, isError: true))
+            return try await job(chunked, speech: nil).run(samples, .dictation(bundleID: nil))
         }
     }
 
-    private func record(_ id: String?, _ status: HistoryEntry.Status, _ text: String? = nil) {
-        guard let id else { return }
-        history.update(id, status: status, text: text)
-        recent = history.entries()
+    private func job(_ transcriber: any Transcriber, speech: (any SpeechDetector)?) -> TranscriptionJob {
+        TranscriptionJob(transcriber: transcriber, llm: llm, settings: settings, speech: speech)
     }
 
-    /// Results of earlier dictations must not cover the HUD of one being recorded now.
+    /// Where a job's text goes: pasted into the focused field, copied (Retry), or only noted (a file, read in History).
+    private enum Delivery: Equatable { case paste, copy, file(name: String) }
+
+    /// Runs `work` in the transcription queue, records its outcome in history and shows it.
+    private func enqueue(
+        _ entry: HistoryEntry, via delivery: Delivery, _ work: @escaping (any Transcriber) async throws -> JobOutcome?
+    ) {
+        gate.enqueue({ [weak self] transcriber in
+            guard let outcome = try await work(transcriber) else { return }
+            await self?.present(outcome, for: entry, via: delivery)
+        }, onError: { [weak self] error in
+            self?.failed(error, entry, via: delivery)
+        })
+    }
+
+    private func present(_ outcome: JobOutcome, for entry: HistoryEntry, via delivery: Delivery) async {
+        guard case let .text(text, warning) = outcome else {
+            history.update(entry.id, status: .nothingHeard, text: nil)
+            switch delivery {
+            case .paste:
+                guard outcome == .empty else { return show(nil) }
+                show(.message(entry.hasAudio ? "Nothing heard. The audio is kept in Recent." : "Nothing heard", isError: false))
+            case .copy: show(.message("Still nothing heard in that recording", isError: false))
+            case let .file(name): show(.message("Nothing heard in \(name)", isError: false))
+            }
+            return
+        }
+        history.update(entry.id, status: .done, text: text)
+        switch delivery {
+        case .paste:
+            await deliver(text, warning: warning.map { "Pasted without AI cleanup: \($0)" })
+        case .copy:
+            copy(text)
+            show(.message(Self.copiedHint, isError: false))
+        case let .file(name):
+            show(warning.map { .message("Transcribed \(name) without AI cleanup: \($0)", isError: true) }
+                ?? .message("Transcribed \(name)", isError: false))
+        }
+    }
+
+    private func failed(_ error: any Error, _ entry: HistoryEntry, via delivery: Delivery) {
+        history.update(entry.id, status: .failed(error.localizedDescription), text: nil)
+        let kept = delivery == .paste && entry.hasAudio ? ". The audio is kept in Recent." : ""
+        show(.message(error.localizedDescription + kept, isError: true))
+    }
+
+    /// Results of earlier dictations, and suggestions, must not cover the HUD of one being recorded now.
     private func show(_ state: HUDModel.State?) {
-        guard recording == nil else { return }
+        guard session.current == nil else { return }
         if let state { hud.show(state) } else { hud.hide() }
     }
 
     /// fn was combined with another key right away (fn+Delete, fn+arrow): drop the recording.
     /// Esc while hands-free keeps the audio in Recent, untranscribed: it may be minutes of dictation.
-    private func cancel() {
-        guard let rec = recording, stopping == nil else { return }
-        preview.stop()
-        levelTimer?.invalidate()
-        levelTimer = nil
-        let samples = recorder.stop()
-        recording = nil
-        updatePhase()
-        guard rec.locked, RecordingGuard.isLongEnough(sampleCount: samples.count) else { return hud.hide() }
-        do {
-            let entry = try history.add(samples: samples, command: rec.command)
-            history.update(entry.id, status: .failed("Cancelled"), text: nil)
-            recent = history.entries()
-            hud.show(.message("Cancelled. The audio is kept in Recent if you need it.", isError: false))
-        } catch {
-            hud.show(.message("Cancelled. Couldn't keep the audio: \(error.localizedDescription)", isError: true))
+    private func cancel(keepingAudio: Bool) {
+        guard !session.isStopping, let finished = session.stop() else { return }
+        guard keepingAudio, RecordingGuard.isLongEnough(sampleCount: finished.samples.count) else { return hud.hide() }
+        let kind: HistoryEntry.Kind = finished.recording.command ? .command(selection: nil) : .dictation
+        let (entry, audioError) = history.add(samples: finished.samples, kind: kind, status: .failed("Cancelled"))
+        if let audioError {
+            history.delete(entry.id)
+            return hud.show(.message("Cancelled. Couldn't keep the audio: \(audioError.localizedDescription)", isError: true))
         }
+        hud.show(.message("Cancelled. The audio is kept in Recent if you need it.", isError: false))
     }
 
     /// The microphone stopped mid-recording and could not restart: keep what was captured.
     private func microphoneFailed(_ reason: String) {
-        guard recording != nil else { return }
-        if recording?.locked == true { hotkey.reset() }
+        guard session.current != nil else { return }
+        hotkey.reset()
         finishRecording()
         hud.show(.message("Microphone stopped: \(reason)", isError: true))
     }
 
     private func updatePhase() {
-        phase = recording != nil ? .recording : pendingJobs > 0 ? .processing : .idle
+        phase = session.current != nil ? .recording : gate.pendingJobs > 0 ? .processing : .idle
     }
 
     /// Pastes into the focused field. With no field to paste into, the text stays on the clipboard instead.
@@ -542,7 +379,7 @@ final class AppController {
         let target = await FocusedElement.current()
         guard PasteTarget.acceptsText(target.focus) else {
             copy(text)
-            show(.message("No text field to paste into. Copied: press ⌘V to paste", isError: false))
+            show(.message("No text field to paste into. \(Self.copiedHint)", isError: false))
             return
         }
         await TextInserter.insert(text)
@@ -565,75 +402,41 @@ final class AppController {
     }
 
     private func suggest(_ entry: DictionaryEntry) {
-        let known = settings.dictionary.map { $0.term.lowercased() } + suggestions.map { $0.term.lowercased() }
-        guard !known.contains(entry.term.lowercased()), !dismissedSuggestions.contains(entry.term.lowercased())
-        else { return }
-        suggestions.insert(entry, at: 0)
-        // Don't cover the HUD of a dictation that's still being transcribed.
-        if phase == .idle { show(.message("Add “\(entry.term)” to your dictionary? It's in Parlo's menu", isError: false)) }
+        guard inbox.offer(entry, dictionary: settings.dictionary) else { return }
+        show(.message("Add “\(entry.term)” to your dictionary? It's in Parlo's menu", isError: false))
     }
 
     func acceptSuggestion(_ entry: DictionaryEntry) {
-        suggestions.removeAll { $0.id == entry.id }
+        inbox.remove(entry)
         settings.dictionary.append(entry)
     }
 
     func dismissSuggestion(_ entry: DictionaryEntry) {
-        suggestions.removeAll { $0.id == entry.id }
-        dismissedSuggestions.insert(entry.term.lowercased())
+        inbox.dismiss(entry)
     }
 
     // MARK: - Windows
 
     func showOnboarding() {
-        if onboardingWindow == nil {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
-                styleMask: [.titled, .closable], backing: .buffered, defer: false
-            )
-            window.title = "Welcome to Parlo"
-            window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: OnboardingView(controller: self))
-            window.center()
-            onboardingWindow = window
+        windows.present(.onboarding, title: "Welcome to Parlo", size: NSSize(width: 520, height: 560)) {
+            OnboardingView(controller: self)
         }
-        NSApp.activate()
-        onboardingWindow?.makeKeyAndOrderFront(nil)
     }
 
-    /// Owned here like onboarding: SwiftUI's Settings scene doesn't open from a menu bar–only app.
     func showSettings(_ tab: SettingsTab) {
         settingsTab = tab
-        if settingsWindow == nil {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 640, height: 500),
-                styleMask: [.titled, .closable], backing: .buffered, defer: false
-            )
-            window.title = "Parlo Settings"
-            window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SettingsView(controller: self))
-            window.center()
-            settingsWindow = window
+        windows.present(.settings, title: "Parlo Settings", size: NSSize(width: 640, height: 500)) {
+            SettingsView(controller: self)
         }
-        NSApp.activate()
-        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     func showHistory() {
-        if historyWindow == nil {
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 600),
-                styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false
-            )
-            window.title = "Parlo History"
-            window.isReleasedWhenClosed = false
-            window.contentMinSize = NSSize(width: 560, height: 400)
-            window.contentView = NSHostingView(rootView: HistoryView(controller: self))
-            window.center()
-            historyWindow = window
+        windows.present(
+            .history, title: "Parlo History", size: NSSize(width: 720, height: 600),
+            style: [.titled, .closable, .miniaturizable, .resizable], minSize: NSSize(width: 560, height: 400)
+        ) {
+            HistoryView(controller: self)
         }
-        NSApp.activate()
-        historyWindow?.makeKeyAndOrderFront(nil)
     }
 
     /// Saves a recording still in progress before quitting, so it can be retried from Recent.
@@ -655,6 +458,6 @@ final class AppController {
     func finishOnboarding(openAtLogin: Bool?) {
         if let openAtLogin, openAtLogin != LoginItem.isOn { try? LoginItem.set(openAtLogin) }
         settings.hasCompletedOnboarding = true
-        onboardingWindow?.close()
+        windows.close(.onboarding)
     }
 }

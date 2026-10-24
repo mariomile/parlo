@@ -13,7 +13,9 @@ struct HistoryView: View {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return controller.recent }
         return controller.recent.filter {
-            $0.text?.localizedCaseInsensitiveContains(q) == true || $0.fileName?.localizedCaseInsensitiveContains(q) == true
+            if $0.text?.localizedCaseInsensitiveContains(q) == true { return true }
+            if case let .file(name) = $0.kind { return name.localizedCaseInsensitiveContains(q) }
+            return false
         }
     }
 
@@ -62,7 +64,7 @@ struct HistoryView: View {
                 Button("Export…", systemImage: "square.and.arrow.up", action: export)
                     .disabled(controller.recent.isEmpty)
             }
-            Text("Drop an audio file here to transcribe it with the active model. Files longer than \(Int(FileTranscription.cleanupMaxSeconds)) s skip AI cleanup.")
+            Text("Drop an audio file here to transcribe it with the active model.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
@@ -99,8 +101,8 @@ private struct StatsHeader: View {
             HStack(spacing: 0) {
                 stat(stats.words.formatted(), "words dictated")
                 stat(stats.dictations.formatted(), "dictations")
-                stat(Self.format(stats.speakingSeconds), "speaking time")
-                stat(Self.format(stats.timeSavedSeconds), "time saved")
+                stat(formattedDuration(stats.speakingSeconds), "speaking time")
+                stat(formattedDuration(stats.timeSavedSeconds), "time saved")
             }
             Text("Time saved compares speaking with typing the same words at \(Int(HistoryStats.typingWordsPerMinute)) words per minute.")
                 .font(.system(size: 10.5))
@@ -116,33 +118,20 @@ private struct StatsHeader: View {
         }
         .frame(maxWidth: .infinity)
     }
-
-    private static func format(_ seconds: Double) -> String {
-        Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2))
-    }
 }
 
 private struct HistoryRow: View {
     let entry: HistoryEntry
     let progress: Double?
     let controller: AppController
-    @State private var copied = false
 
-    private var label: (text: String, dimmed: Bool) {
-        switch entry.status {
-        case .done: (entry.text ?? "", false)
-        case .processing: ("Transcribing…", true)
-        case .nothingHeard: ("Nothing heard", true)
-        case let .failed(reason): ("Failed: \(reason)", true)
-        }
-    }
-
-    private var kind: String {
-        if let name = entry.fileName { return "File: \(name)" }
-        return entry.command ? "Command" : "Dictation"
+    private var isFile: Bool {
+        if case .file = entry.kind { true } else { false }
     }
 
     var body: some View {
+        let label = entry.statusLine
+        return
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(label.text)
@@ -150,26 +139,19 @@ private struct HistoryRow: View {
                     .foregroundStyle(label.dimmed ? .secondary : .primary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if entry.status == .processing, entry.fileName != nil {
+                if entry.status == .processing, isFile {
                     ProgressView(value: progress)
                         .controlSize(.small)
                         .frame(maxWidth: 220)
                 }
-                Text("\(entry.date.formatted(date: .abbreviated, time: .shortened)) · \(Self.duration(entry.duration)) · \(kind)")
+                Text("\(entry.date.formatted(date: .abbreviated, time: .shortened)) · \(formattedDuration(entry.duration)) · \(entry.label)")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
             }
             HStack(spacing: 4) {
-                if let text = entry.text {
-                    button(copied ? "checkmark" : "doc.on.doc", "Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
-                        copied = true
-                        Task {
-                            try? await Task.sleep(for: .seconds(1.2))
-                            copied = false
-                        }
-                    }
+                if entry.text != nil {
+                    CopyButton(copy: { controller.copy(entry) }, label: icon)
+                        .buttonStyle(.borderless)
                     button("text.insert", "Paste into the previous app") { controller.paste(entry) }
                 }
                 if entry.hasAudio && entry.status != .processing {
@@ -181,17 +163,15 @@ private struct HistoryRow: View {
         .padding(.vertical, 4)
     }
 
-    private func button(_ icon: String, _ help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 24, height: 24)
-        }
-        .buttonStyle(.borderless)
-        .help(help)
+    private func button(_ name: String, _ help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { icon(name) }
+            .buttonStyle(.borderless)
+            .help(help)
     }
 
-    private static func duration(_ seconds: Double) -> String {
-        Duration.seconds(seconds.rounded()).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2))
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 24, height: 24)
     }
 }

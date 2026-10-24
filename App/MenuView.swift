@@ -281,19 +281,11 @@ private struct RecentRow: View {
     let entry: HistoryEntry
     let copy: () -> Void
     let retry: () -> Void
-    @State private var copied = false
     @State private var hovering = false
 
-    private var label: (text: String, dimmed: Bool) {
-        switch entry.status {
-        case .done: (entry.text ?? "", false)
-        case .processing: ("Transcribing…", true)
-        case .nothingHeard: ("Nothing heard", true)
-        case let .failed(reason): ("Failed: \(reason)", true)
-        }
-    }
-
     var body: some View {
+        let label = entry.statusLine
+        return
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label.text)
@@ -307,14 +299,8 @@ private struct RecentRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if entry.text != nil {
-                iconButton(copied ? "checkmark" : "doc.on.doc", help: "Copy") {
-                    copy()
-                    copied = true
-                    Task {
-                        try? await Task.sleep(for: .seconds(1.2))
-                        copied = false
-                    }
-                }
+                CopyButton(copy: copy, label: icon)
+                    .buttonStyle(PressableStyle())
             }
             if entry.hasAudio && entry.status != .processing {
                 iconButton("arrow.clockwise", help: "Transcribe again and copy", action: retry)
@@ -326,15 +312,17 @@ private struct RecentRow: View {
         .onHover { hovering = $0 }
     }
 
-    private func iconButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 24, height: 24)
-                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(PressableStyle())
-        .help(help)
+    private func iconButton(_ name: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { icon(name) }
+            .buttonStyle(PressableStyle())
+            .help(help)
+    }
+
+    private func icon(_ name: String) -> some View {
+        Image(systemName: name)
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: 24, height: 24)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
     }
 }
 

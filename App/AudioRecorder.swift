@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import CoreAudio
+import ParloCore
 import Synchronization
 
 enum RecorderError: LocalizedError {
@@ -50,9 +51,7 @@ nonisolated final class SampleSink: Sendable {
 
 /// Captures the microphone as 16 kHz mono Float32, the format every engine expects.
 final class AudioRecorder {
-    nonisolated static let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
-    )!
+    nonisolated static let targetFormat = Audio.format
 
     private var engine: AVAudioEngine?
     private var deviceUID: String?
