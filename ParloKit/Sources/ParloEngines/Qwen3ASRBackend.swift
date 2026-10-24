@@ -40,9 +40,11 @@ actor Qwen3ASRTranscriber: Transcriber {
             guard let name = language, model.config.supportLanguages.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame })
             else { throw TranscriptionError.unsupportedLanguage(languageCode) }
         }
-        // The dictionary is ignored: the model has no vocabulary API, and passing terms as prompt context did not make
-        // it spell them (measured on "CLAUDE.md" / "AGENTS.md").
-        let output = model.generate(audio: MLXArray(samples), language: language)
+        // Qwen3-ASR reads the system turn as context. Labelled terms there make it write most of them, though not
+        // always with the same capitals ("Claude.md" for "CLAUDE.md"); a bare list worked less often.
+        let terms = dictionary.terms
+        let context = terms.isEmpty ? "" : "Vocabulary: " + terms.joined(separator: ", ")
+        let output = model.generate(audio: MLXArray(samples), context: context, language: language)
         return output.text
     }
 }

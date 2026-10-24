@@ -60,7 +60,7 @@ public enum ModelCatalog {
                   requiresExplicitLanguage: false),
         ModelInfo(id: .qwen3ASR, displayName: "Qwen3-ASR 1.7B", engine: .qwen3ASR, approxSizeMB: 1540,
                   languages: "30 languages, auto-detect", italian: 5, english: 5, speed: 3,
-                  note: "Most accurate in our tests. Doesn't use your dictionary words.",
+                  note: "Most accurate in our tests. Uses your dictionary words as hints.",
                   requiresExplicitLanguage: false),
         ModelInfo(id: .whisperTiny, displayName: "Whisper Tiny", engine: .whisperKit, approxSizeMB: 77,
                   languages: "99 languages", italian: 1, english: 2, speed: 5, note: "Fastest Whisper, lowest accuracy.",
