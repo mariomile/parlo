@@ -4,7 +4,7 @@ import SwiftUI
 /// The app's own windows, built on first use and kept for the session. Owned here rather than as SwiftUI
 /// scenes: those don't open from a menu bar–only app.
 final class Windows {
-    enum Slot { case onboarding, settings, history }
+    enum Slot { case onboarding, settings, history, meetings }
 
     private var windows: [Slot: NSWindow] = [:]
 

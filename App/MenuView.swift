@@ -16,6 +16,7 @@ struct MenuView: View {
                 modelRow
                 languageRow
                 aiRow
+                meetingRow
             }
             .padding(6)
             if !controller.suggestions.isEmpty {
@@ -101,6 +102,28 @@ struct MenuView: View {
             Toggle("", isOn: $controller.settings.llm.enabled)
                 .toggleStyle(.switch)
                 .controlSize(.small)
+        }
+    }
+
+    private var meetingRow: some View {
+        Row(
+            icon: "person.2.wave.2", tint: .red, title: "Meeting",
+            subtitle: controller.meetings.isRecording ? "Recording you and the call" : "Transcript and notes of a call"
+        ) {
+            HStack(spacing: 8) {
+                if controller.meetings.isRecording {
+                    Button("Stop") { controller.meetings.stop() }
+                } else {
+                    Button("Start") { controller.startMeeting() }
+                }
+                Button {
+                    controller.showMeetings()
+                    dismiss()
+                } label: {
+                    Image(systemName: "list.bullet")
+                }
+                .help("All meetings")
+            }
         }
     }
 

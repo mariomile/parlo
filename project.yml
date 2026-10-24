@@ -31,7 +31,8 @@ targets:
         CFBundleVersion: "1"
         LSUIElement: true
         LSMinimumSystemVersion: "26.0"
-        NSMicrophoneUsageDescription: Parlo records your voice while you hold the dictation key, and transcribes it on this Mac.
+        NSMicrophoneUsageDescription: Parlo records your voice while you hold the dictation key or record a meeting, and transcribes it on this Mac.
+        NSAudioCaptureUsageDescription: Parlo records what your Mac plays during a meeting you start, so the notes include the other people on the call.
         NSSpeechRecognitionUsageDescription: Parlo can use Apple's on-device speech recognition to transcribe your dictation.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

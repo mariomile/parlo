@@ -25,31 +25,36 @@ final class RecordingSession {
     /// The microphone stopped and could not restart.
     var onFailure: (String) -> Void = { _ in }
 
-    private let recorder = AudioRecorder()
+    private let sink = SampleSink()
+    private let recorder: AudioRecorder
     private let previewer: LivePreviewer
     private var timer: Timer?
     /// The tail after fn is released, before the microphone stops.
     private var stopping: Task<Void, Never>?
 
     init(gate: TranscriberGate) {
+        recorder = AudioRecorder(sink: sink)
         previewer = LivePreviewer(gate: gate)
         recorder.onFailure = { [weak self] in self?.onFailure($0) }
     }
 
-    var level: Float { recorder.level }
+    /// RMS of the latest buffer, 0...~1.
+    var level: Float { sink.level }
     var isStopping: Bool { stopping != nil }
 
     /// `preview`: the language to show live words in, or nil for no preview. `show` gets each one.
     func start(
         command: Bool, deviceUID: String?, preview: (languageCode: String?, show: (String) -> Void)?
     ) throws {
+        recorder.stop()
+        sink.reset()
         try recorder.start(deviceUID: deviceUID)
         current = Recording(
             command: command, bundleID: FrontmostApp.bundleID,
             selection: command ? Task { await SelectionReader.read() } : nil, startedAt: .now
         )
         if let preview {
-            previewer.start(languageCode: preview.languageCode, samples: { [weak self] in self?.recorder.recentSamples($0) ?? [] }) {
+            previewer.start(languageCode: preview.languageCode, samples: { [weak self] in self?.sink.tail($0) ?? [] }) {
                 [weak self] text in if self?.current != nil { preview.show(text) }
             }
         }
@@ -85,7 +90,9 @@ final class RecordingSession {
         previewer.stop()
         timer?.invalidate()
         timer = nil
-        let samples = recorder.stop()
+        // Everything since `start`, even if the microphone already died.
+        recorder.stop()
+        let samples = sink.drain()
         current = nil
         return Finished(recording: rec, samples: samples, usedFallback: recorder.usedFallback)
     }

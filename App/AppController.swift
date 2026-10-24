@@ -31,6 +31,7 @@ final class AppController {
     var settingsTab: SettingsTab = .general
     let models: ModelManager
     let localLLM = LocalLLM()
+    let meetings: MeetingController
 
     private let store: SettingsStore
     private let hud = HUDController()
@@ -81,10 +82,15 @@ final class AppController {
         self.models = models
         gate = TranscriberGate(transcriber: { try await models.transcriber() }, reload: { models.reload() })
         session = RecordingSession(gate: gate)
+        var meetingContext: () -> MeetingController.Context = { fatalError("Set before init returns") }
+        var report: (String, Bool) -> Void = { _, _ in }
+        meetings = MeetingController(gate: gate, context: { meetingContext() }, report: { report($0, $1) })
         onActiveChange = { [weak self] id in
             self?.settings.activeModelID = id
             self?.models.warmUp()
         }
+        meetingContext = { [unowned self] in self.meetingContext }
+        report = { [weak self] text, isError in self?.show(.message(text, isError: isError)) }
     }
 
     func launch() {
@@ -97,6 +103,7 @@ final class AppController {
         }
         session.onFailure = { [weak self] reason in self?.microphoneFailed(reason) }
         history.markInterrupted()
+        meetings.launch()
         EngineInstaller.prepare()
         startHotkey()
         Task {
@@ -510,7 +517,6 @@ final class AppController {
         }
     }
 
-    /// Saves a recording still in progress before quitting, so it can be retried from Recent.
     /// The recording in progress is saved by `AppDelegate.applicationWillTerminate`.
     func quit() {
         NSApp.terminate(nil)
@@ -519,11 +525,47 @@ final class AppController {
     func relaunch() {
         // Saved before the new instance reads the history, not when this one terminates.
         finishRecording()
+        meetings.terminate()
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
         NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
             DispatchQueue.main.async { NSApp.terminate(nil) }
         }
+    }
+
+    // MARK: - Meetings
+
+    func startMeeting() {
+        guard Permissions.microphone else { return showOnboarding() }
+        meetings.start(deviceUID: settings.microphoneUID)
+    }
+
+    func showMeetings() {
+        windows.present(
+            .meetings, title: "Parlo Meetings", size: NSSize(width: 880, height: 620),
+            style: [.titled, .closable, .miniaturizable, .resizable], minSize: NSSize(width: 720, height: 460)
+        ) {
+            MeetingsView(meetings: meetings) { [weak self] in self?.startMeeting() }
+        }
+    }
+
+    /// Notes use the AI provider chosen for cleanup even when cleanup is off: they are what a meeting is for.
+    private var meetingContext: MeetingController.Context {
+        var llm = settings.llm
+        llm.enabled = true
+        let problem = llm.problem(apiKey: apiKey, local: localLLM)
+        // Characters per request: Apple's on-device model reads about 4k tokens, an MLX model on this Mac
+        // stays quick to about 12k characters, a hosted model reads far more.
+        let limit = switch llm.provider {
+        case .apple: 4000
+        case .local: 12000
+        case .openAICompatible: 48000
+        }
+        return MeetingController.Context(
+            languageCode: settings.languageCode, dictionary: settings.dictionary, segmenter: speechDetector,
+            notes: problem == nil ? MeetingNotes(llm: llm.providerClient(apiKey: apiKey, local: localLLM), maxCharacters: limit) : nil,
+            notesProblem: problem
+        )
     }
 
     /// `openAtLogin` is only offered on the first run; later visits leave the Settings choice alone.
