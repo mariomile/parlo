@@ -10,8 +10,10 @@ enum NemotronBackend {
         MLModelConfigurationUtils.defaultModelsDirectory(for: .nemotronMultilingual)
     }
 
-    /// FluidAudio's folder for the auto-language variant, relative to `repoDirectory`.
-    static let variant = "multilingual/\(chunkMs)ms"
+    static let languageCode = "auto"
+
+    /// FluidAudio's folder for the variant, relative to `repoDirectory`.
+    static let variant = "\(StreamingNemotronMultilingualAsrManager.languageDirectory(for: languageCode))/\(chunkMs)ms"
 
     static var directory: URL { repoDirectory.appendingPathComponent(variant, isDirectory: true) }
 
@@ -29,7 +31,7 @@ enum NemotronBackend {
             progressHandler: { progress($0.fractionCompleted) }, shouldSkip: { $0.contains(".mlpackage") }
         )
         // Now that `metadata.json` is there this downloads nothing: it only repairs a tokenizer cached before the fix.
-        _ = try await StreamingNemotronMultilingualAsrManager.downloadVariant(languageCode: "auto", chunkMs: chunkMs)
+        _ = try await StreamingNemotronMultilingualAsrManager.downloadVariant(languageCode: languageCode, chunkMs: chunkMs)
         try Data().write(to: completeMarker)
     }
 

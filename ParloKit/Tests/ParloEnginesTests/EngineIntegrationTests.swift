@@ -85,6 +85,8 @@ struct EngineIntegrationTests {
         ]
         // The CTC model loads in the background after the first dictation that has a dictionary.
         let warmup = try Self.speech("Aggiorna il file CLAUDE.md", voice: "Alice")
+        // Otherwise the warmup would pass before the vocabulary model is there.
+        try #require(try await !transcriber.transcribe(warmup, languageCode: "it", dictionary: []).contains("CLAUDE.md"))
         var ready = false
         for _ in 0..<60 {
             ready = try await transcriber.transcribe(warmup, languageCode: "it", dictionary: dictionary).contains("CLAUDE.md")

@@ -181,13 +181,14 @@ public final class DictationHistory {
         mutate(id) { if $0.isCommand { $0.kind = .command(selection: selection) } }
     }
 
-    /// A recording that can't be removed keeps its entry, so it is never left on disk unlisted.
+    /// A recording that can't be removed keeps its entry, so it is never left on disk unlisted. The file is
+    /// removed for every entry, since pruning can fail to; only an entry with a recording waits for it to go.
     public func delete(_ id: String) {
-        if entries.first(where: { $0.id == id })?.hasAudio == true {
-            do {
-                try FileManager.default.removeItem(at: audioURL(id))
-            } catch let error as CocoaError where error.code == .fileNoSuchFile {
-            } catch {
+        do {
+            try FileManager.default.removeItem(at: audioURL(id))
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+        } catch {
+            if entries.contains(where: { $0.id == id && $0.hasAudio }) {
                 saveError = error.localizedDescription
                 return
             }
