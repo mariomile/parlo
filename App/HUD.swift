@@ -134,8 +134,6 @@ private enum Island {
     static let wing: CGFloat = 86
     static let inset: CGFloat = 16
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.74)
-    static let brand = [Color(red: 0.25, green: 0.48, blue: 1.0), Color(red: 0.55, green: 0.33, blue: 1.0), Color(red: 1.0, green: 0.36, blue: 0.62)]
-    static let command = [Color(red: 0.62, green: 0.38, blue: 1.0), Color(red: 0.86, green: 0.42, blue: 1.0)]
 }
 
 struct IslandView: View {
@@ -170,7 +168,6 @@ struct IslandView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            glow
             NotchShape(topRadius: topRadius, bottomRadius: bottomRadius)
                 .fill(.black)
                 .frame(width: bodyWidth + topRadius * 2, height: bodyHeight)
@@ -234,7 +231,6 @@ struct IslandView: View {
                 if command {
                     Image(systemName: "wand.and.sparkles")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(LinearGradient(colors: Island.command, startPoint: .leading, endPoint: .trailing))
                 } else {
                     RecordingDot()
                 }
@@ -247,16 +243,15 @@ struct IslandView: View {
                 Elapsed(since: model.startedAt)
             }
             .transition(.blurReplace)
-        case .processing:
-            Image(systemName: "sparkles")
+        case let .processing(command):
+            Image(systemName: command ? "wand.and.sparkles" : "sparkles")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(LinearGradient(colors: Island.brand, startPoint: .topLeading, endPoint: .bottomTrailing))
                 .symbolEffect(.pulse, options: .repeating)
                 .transition(.blurReplace)
         case .done:
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white, .green)
+                .foregroundStyle(.black, .white)
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
         case .message:
             Color.clear
@@ -265,11 +260,11 @@ struct IslandView: View {
 
     @ViewBuilder private var trailing: some View {
         switch model.state {
-        case let .recording(command):
-            Bars(levels: model.levels, colors: command ? Island.command : Island.brand, thinking: false)
+        case .recording:
+            Bars(levels: model.levels, thinking: false)
                 .transition(.blurReplace)
-        case let .processing(command):
-            Bars(levels: model.levels, colors: command ? Island.command : Island.brand, thinking: true)
+        case .processing:
+            Bars(levels: model.levels, thinking: true)
                 .transition(.blurReplace)
         case .done:
             Text("Pasted")
@@ -279,22 +274,6 @@ struct IslandView: View {
         case .hidden, .message:
             Color.clear
         }
-    }
-
-    /// Soft brand-colored light under the island that breathes with the voice.
-    private var glow: some View {
-        let level = CGFloat(min((model.levels.suffix(4).reduce(0, +) / 4) * 14, 1))
-        let visible: Bool = switch model.state {
-        case .recording, .processing: true
-        default: false
-        }
-        return Capsule()
-            .fill(LinearGradient(colors: Island.brand, startPoint: .leading, endPoint: .trailing))
-            .frame(width: bodyWidth * 0.7, height: 18)
-            .blur(radius: 18)
-            .opacity(visible ? 0.25 + level * 0.55 : 0)
-            .offset(y: bodyHeight - 12)
-            .animation(.easeOut(duration: 0.12), value: level)
     }
 }
 
@@ -331,7 +310,6 @@ private struct RecordingDot: View {
 /// so the island morphs instead of swapping widgets.
 private struct Bars: View {
     let levels: [Float]
-    let colors: [Color]
     let thinking: Bool
 
     var body: some View {
@@ -343,7 +321,6 @@ private struct Bars: View {
                 }
             }
             .frame(height: 20)
-            .foregroundStyle(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing))
             .animation(.interactiveSpring(response: 0.14, dampingFraction: 0.7), value: levels)
         }
     }

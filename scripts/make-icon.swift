@@ -26,19 +26,15 @@ func render() -> NSBitmapImageRep {
     shadow.shadowOffset = NSSize(width: 0, height: -12)
     shadow.shadowBlurRadius = 28
     shadow.set()
-    color(0x4F46E5).setFill()
+    color(0x000000).setFill()
     bodyPath.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    NSGraphicsContext.saveGraphicsState()
-    bodyPath.addClip()
-    NSGradient(colors: [color(0x3B5BFD), color(0x7C3AED), color(0xEC4899)],
-               atLocations: [0, 0.55, 1], colorSpace: .sRGB)!
-        .draw(in: body, angle: -55)
-    // Soft top highlight.
-    NSGradient(starting: NSColor.white.withAlphaComponent(0.22), ending: NSColor.white.withAlphaComponent(0))!
-        .draw(in: NSRect(x: body.minX, y: body.midY, width: body.width, height: body.height / 2), angle: -90)
-    NSGraphicsContext.restoreGraphicsState()
+    // Hairline edge, so the black body still reads on a dark Dock.
+    let edge = NSBezierPath(roundedRect: body.insetBy(dx: 2, dy: 2), xRadius: 183, yRadius: 183)
+    edge.lineWidth = 4
+    color(0xFFFFFF, 0.14).setStroke()
+    edge.stroke()
 
     // Speech bubble with a tail at the bottom left.
     let bubble = NSRect(x: 232, y: 330, width: 560, height: 400)
@@ -50,17 +46,10 @@ func render() -> NSBitmapImageRep {
     tail.close()
     bubblePath.append(tail)
 
-    NSGraphicsContext.saveGraphicsState()
-    let bubbleShadow = NSShadow()
-    bubbleShadow.shadowColor = NSColor.black.withAlphaComponent(0.25)
-    bubbleShadow.shadowOffset = NSSize(width: 0, height: -10)
-    bubbleShadow.shadowBlurRadius = 24
-    bubbleShadow.set()
-    NSColor.white.setFill()
+    color(0xEDEDED).setFill()
     bubblePath.fill()
-    NSGraphicsContext.restoreGraphicsState()
 
-    // Waveform bars inside the bubble, filled with the background gradient.
+    // Waveform bars inside the bubble, in the body's black.
     let heights: [CGFloat] = [0.38, 0.72, 1.0, 0.6, 0.85, 0.45]
     let barWidth: CGFloat = 46, gap: CGFloat = 30, maxHeight: CGFloat = 250
     let totalWidth = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
@@ -71,12 +60,8 @@ func render() -> NSBitmapImageRep {
         bars.append(NSBezierPath(roundedRect: NSRect(x: x, y: bubble.midY - height / 2, width: barWidth, height: height),
                                  xRadius: barWidth / 2, yRadius: barWidth / 2))
     }
-    NSGraphicsContext.saveGraphicsState()
-    bars.addClip()
-    NSGradient(colors: [color(0x3B5BFD), color(0x7C3AED), color(0xEC4899)],
-               atLocations: [0, 0.5, 1], colorSpace: .sRGB)!
-        .draw(in: bubble, angle: 0)
-    NSGraphicsContext.restoreGraphicsState()
+    color(0x000000).setFill()
+    bars.fill()
 
     NSGraphicsContext.restoreGraphicsState()
     return rep

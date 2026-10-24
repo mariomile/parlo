@@ -65,7 +65,7 @@ struct MenuView: View {
     // MARK: Settings rows
 
     private var modelRow: some View {
-        Row(icon: "waveform", tint: .blue, title: "Voice model") {
+        Row(icon: "waveform", title: "Voice model") {
             Menu {
                 ForEach(installedModels) { info in
                     Button {
@@ -87,7 +87,7 @@ struct MenuView: View {
     }
 
     private var languageRow: some View {
-        Row(icon: "globe", tint: .teal, title: "Language") {
+        Row(icon: "globe", title: "Language") {
             Picker("", selection: $controller.settings.languageCode) {
                 ForEach(languages, id: \.name) { Text($0.name).tag($0.code) }
             }
@@ -96,7 +96,7 @@ struct MenuView: View {
 
     private var aiRow: some View {
         Row(
-            icon: "sparkles", tint: .purple, title: "AI cleanup",
+            icon: "sparkles", title: "AI cleanup",
             subtitle: controller.settings.llm.enabled ? providerName : "Pastes the raw transcript"
         ) {
             Toggle("", isOn: $controller.settings.llm.enabled)
@@ -107,7 +107,7 @@ struct MenuView: View {
 
     private var meetingRow: some View {
         Row(
-            icon: "person.2.wave.2", tint: .red, title: "Meeting",
+            icon: "person.2.wave.2", title: "Meeting",
             subtitle: controller.meetings.problem
                 ?? (controller.meetings.isRecording ? "Recording you and the call" : "Transcript and notes of a call")
         ) {
@@ -242,7 +242,6 @@ struct MenuView: View {
 
 private struct Row<Accessory: View>: View {
     let icon: String
-    let tint: Color
     let title: String
     var subtitle: String?
     @ViewBuilder let accessory: Accessory
@@ -252,9 +251,8 @@ private struct Row<Accessory: View>: View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
                 .frame(width: 24, height: 24)
-                .background(tint.gradient, in: RoundedRectangle(cornerRadius: 6))
+                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.system(size: 13))
                 if let subtitle {
@@ -356,7 +354,7 @@ private struct StatusPill: View {
     private var label: (String, Color) {
         switch phase {
         case .recording: ("Listening", .red)
-        case .processing: ("Working", .purple)
+        case .processing: ("Working", .primary)
         case .idle: ready ? ("Ready", .green) : ("Setup", .orange)
         }
     }

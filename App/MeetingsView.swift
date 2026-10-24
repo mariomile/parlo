@@ -101,7 +101,7 @@ private struct MeetingDetail: View {
                                 .frame(width: 44, alignment: .trailing)
                             Text(turn.speaker.label)
                                 .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(turn.speaker == .me ? Color.accentColor : .orange)
+                                .foregroundStyle(turn.speaker == .me ? Color.primary : .secondary)
                                 .frame(width: 40, alignment: .leading)
                             Text(turn.text).font(.system(size: 13)).textSelection(.enabled)
                         }
