@@ -28,7 +28,9 @@ macOS 26+, Xcode 26+, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew i
 ./scripts/run.sh
 ```
 
-Generates the Xcode project, builds Release, installs to `~/Applications/Parlo.app` and launches it. Parlo lives in the menu bar (waveform icon).
+Builds and signs Release (`scripts/build.sh`), installs to `~/Applications/Parlo.app` and launches it. Parlo lives in the menu bar (waveform icon).
+
+Or download `Parlo-x.y.z.zip` from [Releases](https://github.com/mariomile/parlo/releases), unzip it and move Parlo to Applications. It isn't notarized, so the first launch is blocked: open **System Settings → Privacy & Security** and click **Open Anyway**.
 
 ## First launch
 
@@ -43,9 +45,23 @@ Reopen it any time from the menu: **Permissions & Setup…**
 
 ### Signing and permissions
 
-There is no Developer ID signature yet. `run.sh` signs the app with a local self-signed certificate, "Parlo Development", created in your login keychain on the first run (`scripts/make-signing-identity.sh`). Because the certificate stays the same, macOS keeps the privacy permissions across rebuilds. If Input Monitoring is granted but fn does nothing, use **Restart Parlo** in the welcome window: macOS applies that permission only after a relaunch.
+There is no Developer ID signature yet. `build.sh` signs the app with a local self-signed certificate, "Parlo Development", created in your login keychain on the first run (`scripts/make-signing-identity.sh`). Because the certificate stays the same, macOS keeps the privacy permissions across rebuilds. If Input Monitoring is granted but fn does nothing, use **Restart Parlo** in the welcome window: macOS applies that permission only after a relaunch.
 
 If permissions ever look on but don't work, reset them and grant again: `tccutil reset All com.mariomiletta.parlo`.
+
+## Updates
+
+Parlo checks the latest GitHub release once a day (Sparkle) and offers to install a newer version. Settings → General → Updates turns the check off or runs it now.
+
+To publish a release, from a clean `main`:
+
+```sh
+scripts/release.sh 0.2.0
+```
+
+It bumps the version in `project.yml`, builds and signs, zips the app, signs the zip with the EdDSA key "parlo" from the login keychain, commits, tags `v0.2.0`, pushes, and uploads the zip and `appcast.xml` to a GitHub release. Installed copies only accept updates signed with that key: back it up with `build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account parlo -x ~/parlo-key.txt` and keep the file outside the repo. Back up the "Parlo Development" certificate too (Keychain Access → My Certificates → Export, as .p12): a release signed with a different certificate still installs, but macOS revokes the microphone, Accessibility and Input Monitoring permissions of everyone who updates.
+
+Built Parlo yourself? Turn the update check off in Settings → General. An update replaces your build with the published one, signed by a different certificate, and macOS drops the permissions. Debug builds never check.
 
 ## Models
 

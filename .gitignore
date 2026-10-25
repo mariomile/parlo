@@ -4,3 +4,4 @@ DerivedData/
 .swiftpm/
 build/
 .DS_Store
+*-key.txt

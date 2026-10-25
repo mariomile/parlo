@@ -13,6 +13,7 @@ struct MenuView: View {
             Divider().opacity(0.5)
             VStack(spacing: 2) {
                 if let problem = setupProblem { problemRow(problem) }
+                if let version = controller.updater.availableVersion { updateRow(version) }
                 modelRow
                 languageRow
                 aiRow
@@ -126,6 +127,24 @@ struct MenuView: View {
                 .help("All meetings")
             }
         }
+    }
+
+    private func updateRow(_ version: String) -> some View {
+        Button {
+            controller.updater.check()
+            dismiss()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle.fill").foregroundStyle(.tint)
+                Text("Parlo \(version) is available").font(.system(size: 12, weight: .medium))
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(10)
+            .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(PressableStyle())
+        .padding(.bottom, 4)
     }
 
     private func problemRow(_ problem: (text: String, tab: SettingsTab?)) -> some View {
