@@ -30,6 +30,8 @@ import os, pathlib, plistlib, re
 root = pathlib.Path.cwd()
 state = pathlib.Path(os.environ["RELEASE_TEST_STATE"])
 with (state / "builds").open("a") as out: out.write("build\n")
+if (state / "lock-change.json").exists():
+    (root / "ParloKit/Package.resolved").write_bytes((state / "lock-change.json").read_bytes())
 config = (root / "project.yml").read_text()
 version = re.search(r'CFBundleShortVersionString: "(.*?)"', config)[1]
 build = re.search(r'CFBundleVersion: "(.*?)"', config)[1]
@@ -123,11 +125,17 @@ class ReleaseTests(unittest.TestCase):
         key = (self.state / "public-key").read_text()
         (self.repo / "scripts").mkdir()
         (self.repo / "App").mkdir()
+        (self.repo / "ParloKit").mkdir()
+        self.lock = {"version": 3, "originHash": "package-graph", "pins": [
+            {"identity": "example", "kind": "remoteSourceControl", "location": "https://example.invalid/package",
+             "state": {"revision": "a" * 40, "version": "1.0.0"}}]}
+        (self.repo / "ParloKit/Package.resolved").write_text(json.dumps(self.lock, indent=2) + "\n")
         for name in ["release.sh", "verify-appcast.swift"]:
             shutil.copyfile(ROOT / "scripts" / name, self.repo / "scripts" / name)
         executable(self.repo / "scripts/build.sh", BUILD)
         (self.repo / "project.yml").write_text(
-            f'CFBundleShortVersionString: "0.1.0"\nCFBundleVersion: "1"\nSUPublicEDKey: {key}\n')
+            f'CFBundleShortVersionString: "0.1.0"\nCFBundleVersion: "1"\nSUPublicEDKey: {key}\n'
+            'packages:\n  Sparkle:\n    exactVersion: 2.10.0\n')
         (self.repo / "App/Info.plist").write_bytes(plistlib.dumps({}))
         (self.repo / "App/Parlo.entitlements").write_bytes(plistlib.dumps({}))
         (self.repo / ".gitignore").write_text("build/\n")
@@ -175,6 +183,43 @@ subprocess.run([{str(self.fixture)!r}, "sign", str(state), str(dist / f"Parlo-{{
     def assert_not_published(self):
         remote = self.state / "release.json"
         self.assertTrue(not remote.exists() or json.loads(remote.read_text())["draft"])
+
+    def test_xcode_combined_graph_preserves_exact_package_lock(self):
+        original = (self.repo / "ParloKit/Package.resolved").read_bytes()
+        changed = json.loads(original)
+        changed["originHash"] = "combined-app-graph"
+        changed["pins"].append({"identity": "sparkle", "kind": "remoteSourceControl",
+                                "location": "https://github.com/sparkle-project/Sparkle",
+                                "state": {"revision": "b" * 40, "version": "2.10.0"}})
+        (self.state / "lock-change.json").write_text(json.dumps(changed))
+        self.check(self.release())
+        self.assertEqual((self.repo / "ParloKit/Package.resolved").read_bytes(), original)
+        self.assertEqual(self.git("status", "--porcelain").stdout, "")
+        self.assertFalse(json.loads((self.state / "release.json").read_text())["draft"])
+
+    def test_changed_dependency_is_not_discarded_or_published(self):
+        changed = json.loads(json.dumps(self.lock))
+        changed["pins"][0]["state"]["revision"] = "c" * 40
+        expected = json.dumps(changed)
+        (self.state / "lock-change.json").write_text(expected)
+        result = self.release()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unexpected dependency changes", result.stderr)
+        self.assertEqual((self.repo / "ParloKit/Package.resolved").read_text(), expected)
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.initial_head)
+        self.assert_not_published()
+
+    def test_unexpected_sparkle_version_is_not_discarded_or_published(self):
+        changed = json.loads(json.dumps(self.lock))
+        changed["pins"].append({"identity": "sparkle", "kind": "remoteSourceControl",
+                                "location": "https://github.com/sparkle-project/Sparkle",
+                                "state": {"revision": "b" * 40, "version": "3.0.0"}})
+        expected = json.dumps(changed)
+        (self.state / "lock-change.json").write_text(expected)
+        result = self.release()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.repo / "ParloKit/Package.resolved").read_text(), expected)
+        self.assert_not_published()
 
     def advance_origin(self):
         other = self.base / "other-checkout"
