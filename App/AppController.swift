@@ -31,6 +31,7 @@ final class AppController {
     var settingsTab: SettingsTab = .general
     let models: ModelManager
     let localLLM = LocalLLM()
+    let updater = Updater()
     let meetings: MeetingController
 
     private let store: SettingsStore

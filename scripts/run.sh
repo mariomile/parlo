@@ -4,14 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-./scripts/make-signing-identity.sh
-xcodegen generate --quiet
-xcodebuild -project Parlo.xcodeproj -scheme Parlo -configuration Release \
-  -derivedDataPath build/DerivedData -destination 'platform=macOS' build | tail -3
-
+./scripts/build.sh
 app=build/DerivedData/Build/Products/Release/Parlo.app
-codesign --force --sign "Parlo Development" --options runtime \
-  --entitlements App/Parlo.entitlements "$app"
 
 mkdir -p ~/Applications
 pkill -x Parlo 2>/dev/null || true

@@ -56,6 +56,7 @@ private struct GeneralTab: View {
             Section("Startup") {
                 LoginItemToggle()
             }
+            UpdatesSection(updater: controller.updater)
             Section("Permissions") {
                 PermissionStatus(title: "Microphone", granted: Permissions.microphone, pane: .microphone)
                 PermissionStatus(title: "Accessibility", granted: Permissions.accessibility, pane: .accessibility)
@@ -64,6 +65,19 @@ private struct GeneralTab: View {
         }
         .formStyle(.grouped)
         .onAppear { devices = AudioDevices.inputDevices() }
+    }
+}
+
+private struct UpdatesSection: View {
+    @Bindable var updater: Updater
+
+    var body: some View {
+        Section("Updates") {
+            Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
+            LabeledContent("Version \(updater.version)") {
+                Button("Check now") { updater.check() }
+            }
+        }
     }
 }
 
