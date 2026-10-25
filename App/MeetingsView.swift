@@ -18,10 +18,16 @@ struct MeetingsView: View {
             .safeAreaInset(edge: .bottom) { recordButton.padding(10) }
             .safeAreaInset(edge: .top) {
                 if let error = meetings.store.saveError {
-                    Label("Changes couldn't be saved: \(error)", systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .padding(10)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Changes couldn't be saved: \(error)", systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                        Button("Retry saving and cleanup") {
+                            meetings.store.retryFailedSaves()
+                            meetings.store.retryRetention()
+                        }
+                    }
+                    .padding(10)
                 }
             }
         } detail: {
@@ -160,6 +166,12 @@ private struct MeetingDetail: View {
         }
         if let error = meeting.notesError {
             banner(meeting.notes == nil ? "No notes: \(error)" : error, "sparkles", .orange)
+        }
+        ForEach(Array((meeting.captureWarnings ?? []).enumerated()), id: \.offset) { _, warning in
+            banner("Incomplete recording: \(warning)", "waveform.badge.exclamationmark", .orange)
+        }
+        ForEach(Array((meeting.transcriptionWarnings ?? []).enumerated()), id: \.offset) { _, warning in
+            banner("Incomplete transcript: \(warning)", "exclamationmark.triangle.fill", .orange)
         }
     }
 

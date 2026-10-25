@@ -101,30 +101,73 @@ public struct MeetingTrackTranscriber: Sendable {
         self.dictionary = dictionary
     }
 
-    /// A stretch that fails is left out rather than costing the whole meeting; only when every one fails
-    /// does the error come through.
-    /// `cuts`, in seconds, split stretches where the other side starts and stops: without headphones the microphone
-    /// hears them too, and their words then land in a turn of their own that `MeetingTranscript.merge` can drop.
+    public struct Failure: Equatable, Sendable {
+        public let speaker: MeetingTurn.Speaker
+        public let start: Double
+        public let end: Double
+        public let reason: String
+
+        public var warning: String {
+            "\(speaker.label) [\(MeetingTranscript.timestamp(start))–\(MeetingTranscript.timestamp(end))]: Transcription missing (\(reason))."
+        }
+    }
+
+    public struct Result: Sendable {
+        public let turns: [MeetingTurn]
+        public let failures: [Failure]
+        public var warnings: [String] { failures.map(\.warning) }
+        fileprivate let firstError: (any Error)?
+    }
+
+    /// Compatibility for callers needing only turns. Meeting processing should use `transcribe` and
+    /// persist its warnings; the legacy API still throws when every attempted stretch fails.
     public func turns(
         _ samples: [Float], speaker: MeetingTurn.Speaker, cutAt cuts: [Double] = [], onProgress: @Sendable (Double) -> Void
     ) async throws -> [MeetingTurn] {
+        let result = try await transcribe(samples, speaker: speaker, cutAt: cuts, onProgress: onProgress)
+        if result.turns.isEmpty, let error = result.firstError { throw error }
+        return result.turns
+    }
+
+    /// Keeps successful turns and reports every failed interval, including a wholly failed track, so
+    /// the other side's transcript can still be used. Cancellation is never a partial success.
+    /// `cuts`, in seconds, split stretches where the other side starts and stops: without headphones the microphone
+    /// hears them too, and their words then land in a turn of their own that `MeetingTranscript.merge` can drop.
+    public func transcribe(
+        _ samples: [Float], speaker: MeetingTurn.Speaker, cutAt cuts: [Double] = [], onProgress: @Sendable (Double) -> Void
+    ) async throws -> Result {
+        try Task.checkCancellation()
         guard !RecordingGuard.isDigitalSilence(samples) else {
             onProgress(1)
-            return []
+            return Result(turns: [], failures: [], firstError: nil)
         }
-        let found = try await segmenter.speechRanges(samples)
+        let found: [Range<Int>]
+        do {
+            found = try await segmenter.speechRanges(samples)
+            try Task.checkCancellation()
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            onProgress(1)
+            return Result(
+                turns: [],
+                failures: [Failure(speaker: speaker, start: 0, end: Audio.seconds(samples.count), reason: error.localizedDescription)],
+                firstError: error
+            )
+        }
         let ranges = Self.split(found, at: cuts.map(Audio.sampleCount))
         var turns: [MeetingTurn] = []
+        var failures: [Failure] = []
         var firstError: (any Error)?
-        var attempted = 0
         for (i, range) in ranges.enumerated() {
             try Task.checkCancellation()
-            let piece = Array(samples[range.clamped(to: samples.indices)])
+            let range = range.clamped(to: samples.indices)
+            let piece = Array(samples[range])
             if RecordingGuard.isLongEnough(sampleCount: piece.count), !RecordingGuard.isDigitalSilence(piece) {
-                attempted += 1
                 do {
                     let text = try await transcriber.transcribe(piece, languageCode: languageCode, dictionary: dictionary)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
+                    try Task.checkCancellation()
                     if !text.isEmpty {
                         turns.append(MeetingTurn(
                             speaker: speaker, start: Audio.seconds(range.lowerBound), end: Audio.seconds(range.upperBound), text: text
@@ -133,13 +176,19 @@ public struct MeetingTrackTranscriber: Sendable {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
+                    try Task.checkCancellation()
                     firstError = firstError ?? error
+                    failures.append(Failure(
+                        speaker: speaker, start: Audio.seconds(range.lowerBound), end: Audio.seconds(range.upperBound),
+                        reason: error.localizedDescription
+                    ))
                 }
             }
             onProgress(Double(i + 1) / Double(ranges.count))
         }
-        if let firstError, turns.isEmpty, attempted > 0 { throw firstError }
-        return turns
+        try Task.checkCancellation()
+        if ranges.isEmpty { onProgress(1) }
+        return Result(turns: turns, failures: failures, firstError: firstError)
     }
 
     static func split(_ ranges: [Range<Int>], at cuts: [Int]) -> [Range<Int>] {

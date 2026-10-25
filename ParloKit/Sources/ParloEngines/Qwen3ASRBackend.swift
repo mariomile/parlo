@@ -32,6 +32,7 @@ actor Qwen3ASRTranscriber: Transcriber {
     }
 
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
+        try Task.checkCancellation()
         var language: String?
         if let languageCode {
             language = Locale(identifier: "en").localizedString(forLanguageCode: languageCode)
@@ -42,7 +43,31 @@ actor Qwen3ASRTranscriber: Transcriber {
         // always with the same capitals ("Claude.md" for "CLAUDE.md"); a bare list worked less often.
         let terms = dictionary.terms
         let context = terms.isEmpty ? "" : "Vocabulary: " + terms.joined(separator: ", ")
-        let output = model.generate(audio: MLXArray(samples), context: context, language: language)
-        return output.text
+        let budget = Self.tokenBudget(sampleCount: samples.count)
+        // mlx-audio-swift 0.1.6 checks cancellation between streamed tokens/chunks and cancels its
+        // producer on stream termination. The synchronous generate path has neither guarantee.
+        return try await Self.result(from: model.generateStream(
+            audio: MLXArray(samples), maxTokens: budget, context: context, language: language
+        ), tokenBudget: budget)
+    }
+
+    static func tokenBudget(sampleCount: Int) -> Int {
+        // Generous for multilingual speech, but short previews must not generate 8192 tokens.
+        min(8192, max(256, Int(ceil(Audio.seconds(sampleCount) * 32)) + 128))
+    }
+
+    static func result(from stream: AsyncThrowingStream<STTGeneration, any Error>, tokenBudget: Int) async throws -> String {
+        var result: STTOutput?
+        for try await event in stream {
+            try Task.checkCancellation()
+            if case .result(let output) = event { result = output }
+        }
+        // Upstream ends the stream normally on cancellation. Never publish its partial tokens.
+        try Task.checkCancellation()
+        guard let result else { throw STTError.generationFailed("Transcription ended without a final result") }
+        guard result.generationTokens < tokenBudget else {
+            throw STTError.generationFailed("Transcription reached its token limit. Retry with a shorter recording")
+        }
+        return result.text
     }
 }

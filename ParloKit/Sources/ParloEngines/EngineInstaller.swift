@@ -29,14 +29,19 @@ public struct EngineInstaller: ModelInstaller {
 
     public func uninstall(_ id: ModelID) async throws {
         guard let dir = Self.directory(id) else { return }
-        try HubSnapshot.uninstall(dir)
+        if ModelCatalog.info(id).engine == .whisperKit {
+            try WhisperModelFiles.uninstall(at: dir)
+        } else {
+            try HubSnapshot.uninstall(dir)
+        }
     }
 
     /// Run once at launch, before any model loads or downloads.
-    public static func prepare() {
+    @discardableResult public static func prepare() -> [String] {
         // Files left by a download Parlo quit in the middle of.
-        HubSnapshot.removeLeftovers()
+        let warnings = HubSnapshot.removeLeftovers()
         MLXCache.limit()
+        return warnings
     }
 
     /// Where a model's files live; nil for models macOS manages.

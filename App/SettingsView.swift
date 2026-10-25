@@ -18,6 +18,18 @@ struct SettingsView: View {
             Tab("Dictionary", systemImage: "character.book.closed", value: .dictionary) { DictionaryTab(controller: controller) }
             Tab("Snippets", systemImage: "text.badge.plus", value: .snippets) { SnippetsTab(controller: controller) }
         }
+        .safeAreaInset(edge: .top) {
+            if let problem = controller.settingsProblem {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(.orange)
+                    Button("Reload saved settings") { controller.reloadSettings() }
+                    Text("Reload replaces the settings shown here with the saved file once it can be read.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
         .frame(width: 640, height: 500)
     }
 }
@@ -236,13 +248,13 @@ private struct ModelsTab: View {
 
     private func delete(_ item: StoredFiles) {
         Task {
-            // A failure shows in AI; the files are then removed below regardless.
-            if case .cleanupModel = item.kind { try? await cleanupModel.delete() }
             do {
-                try ModelStorage.delete(item)
+                switch item.kind {
+                case let .model(id): try await models.delete(id)
+                case .cleanupModel: try await cleanupModel.delete()
+                default: try ModelStorage.delete(item)
+                }
                 deleteError = nil
-                // With the files gone this succeeds, so a delete that failed above is cleared too.
-                if case .cleanupModel = item.kind { try? await cleanupModel.delete() }
             } catch {
                 deleteError = "Couldn't delete \(item.name): \(error.localizedDescription)"
             }
@@ -365,6 +377,9 @@ struct ModelActions: View {
                 Button("Cancel") { models.cancel(id) }
             case .failed:
                 Button("Retry") { Task { await models.download(id) } }
+                if needsDownload {
+                    Button("Remove files", role: .destructive) { confirmDelete = true }
+                }
             case .installed:
                 if models.activeModelID != id { Button("Use") { models.select(id) } }
                 if needsDownload {
@@ -407,9 +422,11 @@ private let providers = [
 
 private struct AITab: View {
     @Bindable var controller: AppController
-    @State private var key = ""
+    @State private var keyDraft = EndpointKeyDraft()
     @State private var testResult: (ok: Bool, text: String)?
     @State private var testing = false
+    @State private var testTask: Task<Void, Never>?
+    @State private var testID = UUID()
     @State private var appleStatus = AppleIntelligenceClient.unavailableReason
 
     private var llm: LLMSettings { controller.settings.llm }
@@ -439,9 +456,9 @@ private struct AITab: View {
                     TextField("Model", text: $controller.settings.llm.model)
                     LabeledContent("API key") {
                         HStack {
-                            SecureField("Not set", text: $key).frame(maxWidth: 260)
-                            Button("Save") { controller.setAPIKey(key.isEmpty ? nil : key) }
-                                .disabled(key == (controller.apiKey ?? ""))
+                            SecureField("Not set", text: $keyDraft.text).frame(maxWidth: 260)
+                            Button("Save", action: saveKey)
+                                .disabled(!keyDraft.matches(llm) || keyDraft.text == (controller.apiKey ?? ""))
                         }
                     }
                 }
@@ -455,9 +472,11 @@ private struct AITab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { key = controller.apiKey ?? "" }
-        // Each server has its own key: a new base URL shows the one saved for it.
-        .onChange(of: controller.apiKey) { key = $1 ?? "" }
+        .onAppear(perform: resetKeyDraft)
+        // A nil saved key on both servers is still an identity change.
+        .onChange(of: EndpointKeyDraft.Identity(llm)) { resetKeyDraft() }
+        .onChange(of: controller.apiKey) { resetKeyDraft() }
+        .onDisappear { testTask?.cancel() }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
             appleStatus = AppleIntelligenceClient.unavailableReason
         }
@@ -497,6 +516,7 @@ private struct AITab: View {
                 case let .failed(message):
                     Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
                     Button("Retry") { Task { await files.download() } }
+                    Button("Remove files", role: .destructive) { Task { try? await files.delete() } }
                 case .installed:
                     Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     Button(role: .destructive) { Task { try? await files.delete() } } label: {
@@ -529,22 +549,51 @@ private struct AITab: View {
                     controller.settings.llm.baseURL = p.baseURL
                     controller.settings.llm.model = p.model
                 }
+                resetKeyDraft()
             }
         )
     }
 
+    private func resetKeyDraft() {
+        testTask?.cancel()
+        testTask = nil
+        testID = UUID()
+        testing = false
+        testResult = nil
+        keyDraft.reset(for: llm, savedKey: controller.apiKey)
+    }
+
+    private func saveKey() {
+        guard keyDraft.matches(llm), let endpoint = keyDraft.identity else {
+            resetKeyDraft()
+            return
+        }
+        controller.setAPIKey(keyDraft.text.isEmpty ? nil : keyDraft.text, for: endpoint)
+    }
+
     private func test() {
+        guard keyDraft.matches(llm) else {
+            resetKeyDraft()
+            testResult = (false, "The provider changed. Enter its key and test again.")
+            return
+        }
+        let settings = llm, draft = keyDraft, requestID = UUID()
+        testID = requestID
         testing = true
         testResult = nil
-        let client = llm.providerClient(apiKey: key.isEmpty ? nil : key, local: controller.localLLM)
-        Task {
+        let client = settings.providerClient(apiKey: draft.text.isEmpty ? nil : draft.text, local: controller.localLLM)
+        testTask = Task {
             do {
+                guard !Task.isCancelled, testID == requestID, draft.matches(llm) else { return }
                 let reply = try await client.complete(system: "Reply with the single word OK.", user: "ping", timeout: 10)
+                guard !Task.isCancelled, testID == requestID, draft.matches(llm) else { return }
                 testResult = (true, "Connected: \(reply.prefix(40))")
             } catch {
+                guard !Task.isCancelled, testID == requestID, draft.matches(llm) else { return }
                 testResult = (false, error.localizedDescription)
             }
             testing = false
+            testTask = nil
         }
     }
 }

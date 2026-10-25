@@ -37,6 +37,8 @@
 	<string>Parlo can use Apple's on-device speech recognition to transcribe your dictation.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
 	<key>SUFeedURL</key>
 	<string>https://github.com/mariomile/parlo/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>

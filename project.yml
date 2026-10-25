@@ -37,6 +37,7 @@ targets:
         SUFeedURL: https://github.com/mariomile/parlo/releases/latest/download/appcast.xml
         SUPublicEDKey: eWrB5z9EMnfG9OcP0l7SYoqU6No7Z94dNsJWKK0Yfss=
         SUEnableAutomaticChecks: true
+        SUAllowsAutomaticUpdates: false
         LSMinimumSystemVersion: "26.0"
         NSMicrophoneUsageDescription: Parlo records your voice while you hold the dictation key or record a meeting, and transcribes it on this Mac.
         NSAudioCaptureUsageDescription: Parlo records what your Mac plays during a meeting you start, so the notes include the other people on the call.

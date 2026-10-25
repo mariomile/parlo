@@ -12,7 +12,7 @@ Voice dictation for macOS, in the style of FluidVoice and Wispr Flow. Hold **fn*
 - **Per-app tone**: formal in Mail, casual in Slack, technical in Cursor/Xcode/Terminal. Editable.
 - **Personal dictionary**: "heard as → write as" replacements, plus terms the AI must spell exactly. Qwen3-ASR also gets the terms as hints. When you fix a word right after a paste, Parlo offers to add it.
 - **Voice snippets**: say a trigger phrase, get saved text, alone or mid-sentence.
-- **Command mode**: hold **ctrl**, then **fn**, and say an instruction. It rewrites the selected text, or generates new text when nothing is selected. Needs AI cleanup configured.
+- **Command mode**: hold **ctrl**, then **fn**, and say an instruction. It rewrites the selected text, or generates new text when macOS confirms that nothing is selected. If the focused app doesn't expose its selection, Parlo keeps the recording and asks you to use a supported text field. Needs AI cleanup configured.
 - **History**: every dictation's text, searchable, with stats, re-paste and Markdown export. Audio of the last 20 is kept for retry.
 - **Transcribe a file**: drop any audio file macOS can read on the History window.
 
@@ -51,7 +51,7 @@ If permissions ever look on but don't work, reset them and grant again: `tccutil
 
 ## Updates
 
-Parlo checks the latest GitHub release once a day (Sparkle) and offers to install a newer version. Settings → General → Updates turns the check off or runs it now.
+Parlo checks the latest GitHub release once a day (Sparkle) and offers to install a newer version. Download and installation require your choice in the update window; background automatic installation is disabled, including when an older version saved that preference. Settings → General → Updates turns the check off or runs it now.
 
 To publish a release, from a clean `main`:
 
@@ -59,7 +59,11 @@ To publish a release, from a clean `main`:
 scripts/release.sh 0.2.0
 ```
 
-It bumps the version in `project.yml`, builds and signs, zips the app, signs the zip with the EdDSA key "parlo" from the login keychain, commits, tags `v0.2.0`, pushes, and uploads the zip and `appcast.xml` to a GitHub release. Installed copies only accept updates signed with that key: back it up with `build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account parlo -x ~/parlo-key.txt` and keep the file outside the repo. Back up the "Parlo Development" certificate too (Keychain Access → My Certificates → Export, as .p12): a release signed with a different certificate still installs, but macOS revokes the microphone, Accessibility and Input Monitoring permissions of everyone who updates.
+It bumps the version in `project.yml`, builds and signs, zips the app, and signs the zip with the EdDSA key "parlo" from the login keychain. Before committing or uploading, it verifies the archive signature against `SUPublicEDKey`, the archived app's metadata, and the appcast's version, size and download URL. It commits and tags the version, pushes them atomically, uploads to a **draft** release, downloads both assets and compares their bytes, then publishes.
+
+After a failed push or upload, rerun the same command from the same release commit. The script retains verified artifacts in `build/release/<version>` and resumes the existing tag/draft, even if `origin/main` has since advanced: It keeps the release checkout and archive unchanged and leaves the newer remote commits intact. Divergent histories or conflicting tags stop the retry. A rerun of an already published release verifies its downloaded assets without replacing them. An invalid signature stops publication and restores the version files if no release commit has been created.
+
+Installed copies only accept updates signed with the expected key: back it up with `build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account parlo -x ~/parlo-key.txt` and keep the file outside the repo. Back up the "Parlo Development" certificate too (Keychain Access → My Certificates → Export, as .p12): a release signed with a different certificate still installs, but macOS revokes the microphone, Accessibility and Input Monitoring permissions of everyone who updates.
 
 Built Parlo yourself? Turn the update check off in Settings → General. An update replaces your build with the published one, signed by a different certificate, and macOS drops the permissions. Debug builds never check.
 
@@ -82,11 +86,13 @@ Settings → AI (or **AI Cleanup** in the menu bar): turn it on and pick a provi
 
 ## Pasting
 
-Parlo pastes with ⌘V and then puts your clipboard back. When nothing that takes text has focus (the desktop, a button, a list), it copies the text instead and says "press ⌘V". A transcription that hangs is stopped after 30 s plus the length of the recording, and the audio stays in Recent for Retry.
+Parlo checks the destination immediately before sending ⌘V. It restores the previous clipboard only when Accessibility confirms the expected text was inserted. Otherwise the text stays available so a delayed or manual paste can still read it. When the destination changes or nothing that takes text has focus (the desktop, a button, a list), Parlo keeps the text available for manual paste. A transcription that hangs is stopped after 30 s plus the length of the recording, and the audio stays in Recent for Retry.
 
 ## Data
 
 Settings, styles, dictionary and snippets: `~/Library/Application Support/Parlo/settings.json`. History: `~/Library/Application Support/Parlo/History`. Meetings: `~/Library/Application Support/Parlo/Meetings`. Nothing leaves the Mac except the text sent to the AI provider you configure.
+
+Interrupted or recovered recordings stay in History until a retry succeeds or you delete them. They may temporarily exceed the automatic history and audio limits, including after restarting Parlo.
 
 ## Tests
 
@@ -97,6 +103,19 @@ PARLO_INTEGRATION=1 swift test --filter EngineIntegrationTests
                                              # real models, Italian + English audio from `say`
 PARLO_INTEGRATION=1 PARLO_DOWNLOAD=whisperTiny,parakeetRedux swift test --filter EngineIntegrationTests
                                              # also downloads the listed models first
+```
+
+Release regressions use temporary repositories, synthetic signing keys, and fake GitHub/build commands; they never publish or access the login keychain:
+
+```sh
+python3 scripts/tests/test_release.py -v
+zsh scripts/tests/test-updater-policy.sh      # uses the pinned framework after a build; never starts the updater
+```
+
+The native seam regressions compile production recording, command, clipboard and meeting code with in-memory OS/provider fakes, plus a real-SDK typecheck. They do not use the microphone, system clipboard or keyboard:
+
+```sh
+python3 scripts/tests/test_native_audit.py
 ```
 
 ## Layout

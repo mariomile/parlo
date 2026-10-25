@@ -16,7 +16,6 @@ enum KeyPoster {
     }
 
     static func paste() { post(keyCode: 9, flags: .maskCommand) } // V
-    static func copy() { post(keyCode: 8, flags: .maskCommand) } // C
 }
 
 /// Saves and restores the general pasteboard around our temporary writes.
@@ -44,8 +43,7 @@ struct PasteboardSnapshot {
     }
 }
 
-/// Pasting and reading the selection both borrow the clipboard. They take turns, so neither saves
-/// the other's temporary text as the user's clipboard and restores that instead.
+/// Every Parlo clipboard write takes a turn, including explicit History and Meeting copies.
 enum ClipboardTurn {
     private static var last: Task<Void, Never>?
 
@@ -58,94 +56,113 @@ enum ClipboardTurn {
         last = Task { _ = await turn.value }
         return await turn.value
     }
+
+    @discardableResult
+    static func copy(_ text: String, if isCurrent: @escaping @MainActor () -> Bool = { true }) async -> Bool {
+        await take {
+            guard isCurrent() else { return false }
+            NSPasteboard.general.clearContents()
+            return NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
 }
 
 enum TextInserter {
-    enum Outcome {
-        case pasted
-        /// The app never read the text; it's left on the clipboard for the user to paste themselves.
+    enum Outcome: Sendable {
+        /// The expected field changed to the exact text produced by replacing its selection.
+        case pasted(WatchedField)
+        /// A paste was sent but insertion could not be verified. Keep the text available for a manual paste.
         case leftOnClipboard
-        /// The app never read the text, and something else wrote the clipboard meanwhile.
+        case noTarget
+        case targetChanged
+        /// Insertion wasn't verified, and something else wrote the clipboard meanwhile.
         case lost
+        case cancelled
     }
 
-    /// Pastes `text` into the focused field, then puts the user's clipboard back.
-    static func insert(_ text: String) async -> Outcome {
-        await ClipboardTurn.take { await paste(text) }
+    /// Target and lifetime are checked inside the clipboard turn, after all asynchronous focus reads.
+    static func insert(
+        _ text: String, expectedPID: pid_t? = nil, selection: SelectionContext? = nil,
+        if isCurrent: @escaping @MainActor () -> Bool = { true }
+    ) async -> Outcome {
+        await ClipboardTurn.take {
+            await paste(text, expectedPID: expectedPID, selection: selection, isCurrent: isCurrent)
+        }
     }
 
-    /// The user's clipboard goes back once the target app has read the text, not after a guessed delay:
-    /// a busy app that pastes late would otherwise paste the user's old clipboard instead.
-    private static func paste(_ text: String) async -> Outcome {
+    private static func paste(
+        _ text: String, expectedPID: pid_t?, selection: SelectionContext?, isCurrent: @MainActor () -> Bool
+    ) async -> Outcome {
+        guard isCurrent() else { return .cancelled }
+        let pid = selection?.processID ?? expectedPID ?? FrontmostApp.processID
+        let target = await FocusedElement.current()
+        let expectedValue = await target.field?.valueByInserting(text)
+        guard isCurrent() else { return .cancelled }
+
         let pb = NSPasteboard.general
+        // Reading a pasteboard provider can itself be slow. Save it before the final target check.
         let saved = PasteboardSnapshot(pb)
-        let provider = PasteProvider(text: text)
+        guard isCurrent() else { return .cancelled }
+        let acceptsText = PasteTarget.acceptsText(target.focus)
+        let matches = FocusedElement.matches(target.field, selection: selection)
+        // No suspension between this check and Cmd+V. History supplies its intended app; commands
+        // also require the original field and selection. An unverifiable command is never pasted.
+        let sameApp = pid != nil && FrontmostApp.processID == pid
+
         let item = NSPasteboardItem()
-        item.setDataProvider(provider, forTypes: [.string])
-        item.setData(Data(), forType: PasteboardSnapshot.transientType)
+        item.setString(text, forType: .string)
+        if acceptsText && matches && sameApp { item.setData(Data(), forType: PasteboardSnapshot.transientType) }
         pb.clearContents()
-        pb.writeObjects([item])
+        guard pb.writeObjects([item]) else { return .lost }
+        guard sameApp && matches else { return .targetChanged }
+        guard acceptsText else { return .noTarget }
+        // Pasteboard IPC can also take time. Revalidate after writing it, at the actual event boundary.
+        guard FocusedElement.matches(target.field, selection: selection), FrontmostApp.processID == pid else { return .targetChanged }
+        guard isCurrent() else { return .cancelled }
         let ours = pb.changeCount
-        let posted = ContinuousClock.now
         KeyPoster.paste()
-        // Up to 3 s for the read (a field that can't take text never reads).
-        for _ in 0..<150 where !provider.wasRead {
+
+        // A pasteboard read has no reader identity and proves nothing about insertion. Only a change
+        // to the expected AX value allows restoration. Otherwise leave our text for even a late reader.
+        for _ in 0..<30 {
+            guard isCurrent() else { return .cancelled }
+            if let expectedValue, let field = target.field, await field.hasValue(expectedValue) {
+                guard isCurrent() else { return .cancelled }
+                if pb.changeCount == ours { saved.restore(pb) }
+                return .pasted(field)
+            }
+            guard pb.changeCount == ours else { return .lost }
             try? await Task.sleep(for: .milliseconds(20))
         }
-        guard pb.changeCount == ours else { return provider.wasRead ? .pasted : .lost }
-        guard provider.wasRead else {
-            pb.clearContents()
-            pb.setString(text, forType: .string)
-            return .leftOnClipboard
-        }
-        // A beat for apps that read twice, and never sooner than 0.6 s after the keystroke: some read
-        // the clipboard once to check it and again when they actually paste.
-        try? await Task.sleep(until: max(.now + .milliseconds(150), posted + .milliseconds(600)))
-        if pb.changeCount == ours { saved.restore(pb) }
-        return .pasted
+        return pb.changeCount == ours ? .leftOnClipboard : .lost
     }
 }
 
-/// Supplies the pasted text only when an app asks for it, and notes that it did.
-private final class PasteProvider: NSObject, @MainActor NSPasteboardItemDataProvider {
+/// An AX-verified command input. Empty text means a verified empty selection, not a failed read.
+nonisolated struct SelectionContext: Sendable {
+    let field: WatchedField
+    let processID: pid_t
     let text: String
-    private(set) var wasRead = false
+    let range: CFRange?
+}
 
-    init(text: String) {
-        self.text = text
-    }
+nonisolated enum CommandSelection: Sendable {
+    case available(SelectionContext)
+    case unavailable
 
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        item.setString(text, forType: type)
-        wasRead = true
+    var context: SelectionContext? {
+        if case let .available(context) = self { context } else { nil }
     }
+    var text: String? { context.flatMap { $0.text.isEmpty ? nil : $0.text } }
 }
 
 enum SelectionReader {
-    /// The selected text, read through Accessibility when the app exposes it; otherwise copied with Cmd+C,
-    /// restoring the clipboard. Nil when nothing is selected.
-    static func read() async -> String? {
-        if let text = await FocusedElement.selectedText() { return text }
-        return await ClipboardTurn.take { await copySelection() }
-    }
-
-    /// Waits up to 1 s: busy Electron apps can take a while to answer Cmd+C.
-    private static func copySelection() async -> String? {
-        let pb = NSPasteboard.general
-        let saved = PasteboardSnapshot(pb)
-        let before = pb.changeCount
-        KeyPoster.copy()
-        for _ in 0..<50 where pb.changeCount == before {
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        guard pb.changeCount != before else { return nil }
-        // Something else wrote the clipboard meanwhile, a password manager say: not the selection, and not ours to undo.
-        let types = pb.types ?? []
-        guard !types.contains(PasteboardSnapshot.concealedType), !types.contains(PasteboardSnapshot.transientType)
-        else { return nil }
-        let text = pb.string(forType: .string)
-        saved.restore(pb)
-        return text?.isEmpty == false ? text : nil
+    /// Cmd+C cannot identify the writer of a clipboard change. Never use it as command input.
+    static func read(expectedPID: pid_t?) async -> CommandSelection {
+        guard let expectedPID else { return .unavailable }
+        let result = await FocusedElement.selection(expectedPID: expectedPID)
+        guard FrontmostApp.processID == expectedPID else { return .unavailable }
+        return result
     }
 }
 
@@ -185,12 +202,51 @@ nonisolated enum FocusedElement {
             ? .nothing : .unknown
     }
 
-    /// The focused element's selected text; nil when it has none, doesn't expose it, or is a password field.
-    @concurrent static func selectedText() async -> String? {
-        guard let element = focused(), !isSecure(element),
-              let text = string(element, kAXSelectedTextAttribute), !text.isEmpty
-        else { return nil }
-        return text
+    @concurrent static func selection(expectedPID: pid_t) async -> CommandSelection {
+        guard let element = focused(), processID(element) == expectedPID, !isSecure(element),
+              let text = selectedText(element), text.count <= maxReadLength else { return .unavailable }
+        let context = SelectionContext(
+            field: WatchedField(element: element), processID: expectedPID,
+            text: text, range: selectedRange(element)
+        )
+        // AX can suspend while the user changes field or selection. Do not combine different contexts.
+        guard matches(context.field, selection: context) else { return .unavailable }
+        return .available(context)
+    }
+
+    static func processID(_ element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        return AXUIElementGetPid(element, &pid) == .success ? pid : nil
+    }
+
+    static func selectedRange(_ element: AXUIElement) -> CFRange? {
+        guard let raw = attribute(element, kAXSelectedTextRangeAttribute),
+              CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        let value = raw as! AXValue
+        var range = CFRange()
+        guard AXValueGetType(value) == .cfRange, AXValueGetValue(value, .cfRange, &range),
+              range.location >= 0, range.length >= 0 else { return nil }
+        return range
+    }
+
+    private static func selectedText(_ element: AXUIElement) -> String? {
+        if let text = string(element, kAXSelectedTextAttribute) { return text }
+        guard let range = selectedRange(element) else { return nil }
+        if range.length == 0 { return "" }
+        guard let value = text(element) as NSString?, range.location <= value.length,
+              range.length <= value.length - range.location else { return nil }
+        return value.substring(with: NSRange(location: range.location, length: range.length))
+    }
+
+    /// Synchronous and bounded by the AX timeout: called immediately before the paste event.
+    static func matches(_ field: WatchedField?, selection: SelectionContext?) -> Bool {
+        guard let field else { return selection == nil }
+        guard let now = focused(), CFEqual(now, field.element) else { return false }
+        guard let selection else { return true }
+        guard CFEqual(now, selection.field.element), processID(now) == selection.processID, !isSecure(now),
+              selectedText(now) == selection.text else { return false }
+        let range = selectedRange(now)
+        return range?.location == selection.range?.location && range?.length == selection.range?.length
     }
 
     private static func isSecure(_ element: AXUIElement) -> Bool {
@@ -220,6 +276,18 @@ nonisolated enum FocusedElement {
 /// The field Parlo just pasted into, watched for the user fixing a word.
 nonisolated struct WatchedField: @unchecked Sendable { // AXUIElement can be used from any thread.
     let element: AXUIElement
+
+    @concurrent func valueByInserting(_ text: String) async -> String? {
+        guard let before = FocusedElement.text(element), let range = FocusedElement.selectedRange(element) else { return nil }
+        let value = before as NSString
+        guard range.location <= value.length, range.length <= value.length - range.location else { return nil }
+        let after = value.replacingCharacters(in: NSRange(location: range.location, length: range.length), with: text)
+        return after == before ? nil : after
+    }
+
+    @concurrent func hasValue(_ expected: String) async -> Bool {
+        FocusedElement.text(element) == expected
+    }
 
     /// The field's text right after the paste, and again after 30 s or as soon as the user leaves the
     /// field or changes the text around the paste (a sent message, a cleared field).
@@ -254,6 +322,7 @@ enum LoginItem {
 
 enum FrontmostApp {
     static var bundleID: String? { NSWorkspace.shared.frontmostApplication?.bundleIdentifier }
+    static var processID: pid_t? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
 }
 
 enum Permissions {

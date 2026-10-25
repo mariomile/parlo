@@ -42,6 +42,8 @@ extension LLMSettings {
 
     /// A server on this Mac (Ollama, LM Studio) needs no key.
     private var isOnThisMac: Bool {
-        ["localhost", "127.0.0.1", "::1"].contains(URL(string: baseURL)?.host() ?? "")
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        return ["localhost", "127.0.0.1", "::1"].contains(url.host()?.lowercased() ?? "")
     }
 }

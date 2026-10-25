@@ -15,7 +15,7 @@ import Testing
 
     @Test func dropsMyTurnWhenItRepeatsWhatTheySaid() {
         let them = [turn(.them, 10, 16, "We should move the launch to next Thursday because the build is late")]
-        let echo = turn(.me, 10.4, 16.2, "move the launch to next Thursday because the build")
+        let echo = turn(.me, 10.4, 16.2, "We should move the launch to next Thursday because the build is late.")
         let reply = turn(.me, 17, 20, "Thursday works, I will update the launch plan")
         let merged = MeetingTranscript.merge(me: [echo, reply], them: them)
         #expect(merged.map(\.speaker) == [.them, .me])

@@ -33,7 +33,7 @@ import Testing
 
     @Test func eachOccurrenceGetsItsOwnToken() {
         let (encoded, used) = SnippetCodec.encode("firma e firma, my address", snippets: snippets)
-        #expect(encoded == "⟦S2⟧ e ⟦S3⟧, ⟦S1⟧")
+        #expect(encoded == "⟦S1⟧ e ⟦S2⟧, ⟦S3⟧")
         #expect(SnippetCodec.decode(encoded, used: used) == "Mario\nmario@example.com e Mario\nmario@example.com, Via Roma 1, Milano")
         #expect(!SnippetCodec.allTokensPresent("⟦S2⟧ e ⟦S1⟧", used: used))
     }

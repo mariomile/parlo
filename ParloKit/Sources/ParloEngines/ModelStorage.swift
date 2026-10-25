@@ -33,18 +33,31 @@ public enum ModelStorage {
     public static func scan() -> [StoredFiles] {
         var items: [StoredFiles] = []
         var claimed: Set<String> = []
-        func add(_ url: URL, _ name: String, _ kind: StoredFiles.Kind) {
-            let url = topFolder(url)
+        func add(_ url: URL, _ name: String, _ kind: StoredFiles.Kind, group: Bool = true, companions: [URL] = []) {
+            let url = group ? topFolder(url) : url
             let path = url.standardizedFileURL.path
-            guard !claimed.contains(path), FileManager.default.fileExists(atPath: path) else { return }
-            claimed.insert(path)
-            items.append(StoredFiles(url: url, name: name, kind: kind, bytes: size(of: url)))
+            let paths = [url] + companions
+            guard !claimed.contains(path), paths.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) else { return }
+            for owned in paths { claimed.insert(owned.standardizedFileURL.path) }
+            items.append(StoredFiles(url: url, name: name, kind: kind, bytes: paths.reduce(0) { $0 + size(of: $1) }))
         }
 
         for info in ModelCatalog.all {
-            if let dir = EngineInstaller.directory(info.id) { add(dir, info.displayName, .model(info.id)) }
+            if let dir = EngineInstaller.directory(info.id) {
+                let companions: [URL]
+                switch info.engine {
+                case .whisperKit: companions = [WhisperModelFiles.cacheDirectory(for: dir)]
+                case .qwen3ASR:
+                    let leftovers = HubSnapshot.leftovers(of: dir)
+                    companions = [leftovers.partial, leftovers.cache]
+                default: companions = []
+                }
+                add(dir, info.displayName, .model(info.id), companions: companions)
+            }
         }
-        add(HubSnapshot.directory(CleanupModel.folder), CleanupModel.displayName, .cleanupModel)
+        let cleanup = HubSnapshot.directory(CleanupModel.folder)
+        let cleanupLeftovers = HubSnapshot.leftovers(of: cleanup)
+        add(cleanup, CleanupModel.displayName, .cleanupModel, companions: [cleanupLeftovers.partial, cleanupLeftovers.cache])
         add(CtcModels.defaultCacheDirectory(for: .ctc110m), "Vocabulary booster", .vocabulary)
         add(MLModelConfigurationUtils.defaultModelsDirectory(for: .vad), "Voice detection", .voiceDetection)
         for root in [fluidAudioRoot, whisperRoot] {
@@ -55,12 +68,36 @@ public enum ModelStorage {
                 add(child, child.lastPathComponent, .other)
             }
         }
+        // Unknown variants also remain visible. Known caches above belong to their model's row and
+        // Delete action, so cancellation/cleanup is coordinated through that model's Installable.
+        for cache in whisperCaches(in: whisperRoot) {
+            add(cache, "\(cache.lastPathComponent) download cache", .other, group: false)
+        }
+        // Failed startup cleanup stays visible and deletable instead of silently consuming disk.
+        let leftovers = (try? FileManager.default.contentsOfDirectory(at: HubSnapshot.root, includingPropertiesForKeys: nil)) ?? []
+        for leftover in leftovers where ["partial", "cache"].contains(leftover.pathExtension) {
+            add(leftover, "\(leftover.lastPathComponent) download files", .other, group: false)
+        }
         return items.sorted { $0.bytes > $1.bytes }
     }
 
     public static func delete(_ item: StoredFiles) throws {
-        guard FileManager.default.fileExists(atPath: item.url.path) else { return }
-        try FileManager.default.removeItem(at: item.url)
+        if case .vocabulary = item.kind {
+            try ParakeetBackend.vocabularyFiles.delete()
+        } else if case .model(let id) = item.kind, ModelCatalog.info(id).engine == .whisperKit {
+            try WhisperModelFiles.uninstall(at: item.url)
+        } else if case .model = item.kind {
+            try HubSnapshot.uninstall(item.url)
+        } else if case .cleanupModel = item.kind {
+            try HubSnapshot.uninstall(item.url)
+        } else {
+            try ModelFileCleanup.remove([item.url])
+        }
+    }
+
+    static func whisperCaches(in root: URL) -> [URL] {
+        let cache = root.appendingPathComponent(".cache/huggingface/download", isDirectory: true)
+        return (try? FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)) ?? []
     }
 
     /// The folder directly under a model root that holds `url`, so a model's leftovers count and go with it.
