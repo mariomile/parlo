@@ -24,11 +24,14 @@ struct HistoryView: View {
             StatsHeader(stats: HistoryStats(controller.recent))
             Divider()
             if let error = controller.historySaveError {
-                Label("History can't be saved to disk: \(error)", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
+                HStack(alignment: .top) {
+                    Label("History needs attention: \(error)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Retry", action: controller.retryHistoryStorage)
+                }
+                .padding(10)
                 Divider()
             }
             toolbar

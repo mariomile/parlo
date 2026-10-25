@@ -5,6 +5,7 @@ import ParloCore
 /// Parakeet TDT models via FluidAudio. Files live in FluidAudio's shared cache, so models
 /// already downloaded by FluidVoice are picked up as installed.
 enum ParakeetBackend {
+    static let vocabularyFiles = VocabularyModelFiles(directory: CtcModels.defaultCacheDirectory(for: .ctc110m))
     static func version(_ id: ModelID) -> AsrModelVersion {
         switch id {
         case .parakeetUltra: .ultra
@@ -41,6 +42,7 @@ actor ParakeetTranscriber: Transcriber {
     let manager: AsrManager
     private var ctcModels: CtcModels?
     private var loadingCtc = false
+    private var ctcGeneration = 0
     /// After a failed download, wait before trying again rather than retrying on every dictation.
     private var ctcRetryAfter = Date.distantPast
     private var session: (key: [String], boosting: VocabularyBoostingSession)?
@@ -50,6 +52,7 @@ actor ParakeetTranscriber: Transcriber {
     }
 
     func transcribe(_ samples: [Float], languageCode: String?, dictionary: [DictionaryEntry]) async throws -> String {
+        refreshCtcState()
         if !dictionary.terms.isEmpty { startLoadingCtcModels() }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let language = languageCode.flatMap { Language(rawValue: $0) }
@@ -63,6 +66,7 @@ actor ParakeetTranscriber: Transcriber {
 
     /// Nil when the dictionary is empty or the CTC model can't load: boosting never blocks a dictation.
     private func boostingSession(for dictionary: [DictionaryEntry]) async -> VocabularyBoostingSession? {
+        refreshCtcState()
         let entries = dictionary.filter { !$0.term.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !entries.isEmpty else { return nil }
         let key = entries.map { ([$0.term] + $0.heardAs).joined(separator: "\u{1F}") }
@@ -75,9 +79,12 @@ actor ParakeetTranscriber: Transcriber {
                 aliases: entry.heardAs.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             )
         }
+        let generation = ctcGeneration
         guard let boosting = try? await VocabularyBoostingSession(
             vocabulary: CustomVocabularyContext(terms: terms), ctcModels: models
         ) else { return nil }
+        refreshCtcState()
+        guard generation == ctcGeneration, ctcModels != nil else { return nil }
         session = (key, boosting)
         return boosting
     }
@@ -86,13 +93,45 @@ actor ParakeetTranscriber: Transcriber {
     /// ready skip boosting instead of waiting for it.
     private func startLoadingCtcModels() {
         guard ctcModels == nil, !loadingCtc, Date() >= ctcRetryAfter else { return }
+        guard let generation = ParakeetBackend.vocabularyFiles.beginLoad() else { return }
         loadingCtc = true
-        Task { ctcLoaded(try? await CtcModels.downloadAndLoad(variant: .ctc110m)) }
+        Task {
+            let models = try? await Self.loadCtcModels()
+            ParakeetBackend.vocabularyFiles.finishLoad()
+            ctcLoaded(models, generation: generation)
+        }
     }
 
-    private func ctcLoaded(_ models: CtcModels?) {
-        ctcModels = models
+    private static func loadCtcModels() async throws -> CtcModels {
+        let directory = ParakeetBackend.vocabularyFiles.directory
+        // Upstream's modelsExist does not include the tokenizer read by VocabularyBoostingSession.
+        if !FileManager.default.fileExists(atPath: directory.appendingPathComponent("tokenizer.json").path) {
+            try await ModelHub.download(.parakeetCtc110m, to: directory.deletingLastPathComponent(), additionalModelNames: ["tokenizer.json"])
+        }
+        return try await CtcModels.downloadAndLoad(variant: .ctc110m)
+    }
+
+    private func ctcLoaded(_ models: CtcModels?, generation: Int) {
         loadingCtc = false
+        let files = ParakeetBackend.vocabularyFiles
+        guard generation == files.generation, files.assetsExist else {
+            ctcModels = nil
+            session = nil
+            ctcRetryAfter = Date().addingTimeInterval(300)
+            return
+        }
+        ctcGeneration = generation
+        ctcModels = models
         if models == nil { ctcRetryAfter = Date().addingTimeInterval(300) }
+    }
+
+    private func refreshCtcState() {
+        let files = ParakeetBackend.vocabularyFiles
+        if ctcGeneration != files.generation || (ctcModels != nil && !files.assetsExist) {
+            ctcGeneration = files.generation
+            ctcModels = nil
+            session = nil
+            ctcRetryAfter = .distantPast
+        }
     }
 }

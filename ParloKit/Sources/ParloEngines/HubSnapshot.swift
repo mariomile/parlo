@@ -24,40 +24,44 @@ enum HubSnapshot {
         let fm = FileManager.default
         let (partial, scratchCache) = leftovers(of: directory)
         try fm.createDirectory(at: partial, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: scratchCache) }
         let client = HubClient(cache: HubCache(cacheDirectory: scratchCache))
         do {
             _ = try await client.downloadSnapshot(of: Repo.ID(rawValue: repo)!, to: partial, matching: patterns) {
                 progress($0.fractionCompleted)
             }
             try Task.checkCancellation()
+            try ModelFileCleanup.remove([scratchCache])
+            try ModelFileCleanup.remove([directory])
+            try fm.moveItem(at: partial, to: directory)
         } catch {
             // Nothing resumes from a partial download: the cache it would need is deleted too.
-            try? fm.removeItem(at: partial)
+            do { try ModelFileCleanup.remove([partial, scratchCache]) }
+            catch let cleanup {
+                throw ModelFileCleanup.Failure(problems: [error.localizedDescription, "Cleanup failed: \(cleanup.localizedDescription)"])
+            }
             throw error
         }
-        if fm.fileExists(atPath: directory.path) { try fm.removeItem(at: directory) }
-        try fm.moveItem(at: partial, to: directory)
     }
 
     static func uninstall(_ directory: URL) throws {
         let (partial, scratchCache) = leftovers(of: directory)
-        try? FileManager.default.removeItem(at: partial)
-        try? FileManager.default.removeItem(at: scratchCache)
-        if FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.removeItem(at: directory)
-        }
+        try ModelFileCleanup.remove([partial, scratchCache, directory])
     }
 
     /// Quitting Parlo mid-download leaves these folders behind, up to the model's size.
-    static func removeLeftovers() {
-        let children = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
-        for child in children where ["partial", "cache"].contains(child.pathExtension) {
-            try? FileManager.default.removeItem(at: child)
+    @discardableResult static func removeLeftovers(in root: URL = root) -> [String] {
+        do {
+            let children = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            try ModelFileCleanup.remove(children.filter { ["partial", "cache"].contains($0.pathExtension) })
+            return []
+        } catch {
+            let ns = error as NSError
+            if ns.domain == NSCocoaErrorDomain, ns.code == NSFileReadNoSuchFileError { return [] }
+            return [error.localizedDescription]
         }
     }
 
-    private static func leftovers(of directory: URL) -> (partial: URL, cache: URL) {
+    static func leftovers(of directory: URL) -> (partial: URL, cache: URL) {
         let parent = directory.deletingLastPathComponent(), name = directory.lastPathComponent
         return (
             parent.appendingPathComponent(name + ".partial", isDirectory: true),

@@ -112,4 +112,25 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         _ = try await LLMClient(settings: local, apiKey: "k", session: session()).complete(system: "S", user: "U", timeout: 5)
         #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer k")
     }
+
+    @Test(arguments: [" HTTP://LOCALHOST:11434/v1 \n", "http://127.0.0.1:8080/v1", "http://[::1]:8080/v1", "HTTPS://API.EXAMPLE.COM/v1"])
+    func normalizedEndpointCanAuthorize(_ endpoint: String) async throws {
+        StubProtocol.handler = { _ in (200, Data(#"{"choices":[{"message":{"content":"ok"}}]}"#.utf8)) }
+        var normalized = settings
+        normalized.baseURL = endpoint
+        let result = try await LLMClient(settings: normalized, apiKey: "fixture-key", session: session())
+            .complete(system: "S", user: "U", timeout: 5)
+        #expect(result == "ok")
+        #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key")
+    }
+
+    @Test(arguments: ["http://LOCALHOST.example.com/v1", "http://localhost@remote.example/v1"])
+    func deceptiveLoopbackHostCannotAuthorize(_ endpoint: String) async {
+        var remote = settings
+        remote.baseURL = endpoint
+        await #expect(throws: LLMError.insecureURL) {
+            try await LLMClient(settings: remote, apiKey: "fixture-key", session: session())
+                .complete(system: "S", user: "U", timeout: 5)
+        }
+    }
 }

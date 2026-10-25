@@ -120,13 +120,14 @@ import Testing
         #expect(history.saveError != nil)
     }
 
-    @Test func entryWithoutRecordingIsDeletedEvenWhenFilesCannotBeRemoved() throws {
+    @Test func unreadableFolderCannotProveARecordingIsAbsent() throws {
         let history = DictationHistory(directory: dir)
         let file = history.addFile(URL(fileURLWithPath: "talk.m4a"), duration: 3)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: dir.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
         history.delete(file.id)
-        #expect(history.entries.isEmpty)
+        #expect(history.entries.map(\.id) == [file.id])
+        #expect(history.saveError != nil)
     }
 
     @Test func deleteRemovesARecordingPruningLeftBehind() throws {

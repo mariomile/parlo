@@ -45,6 +45,10 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
     public var notes: String?
     /// Why the notes couldn't be written. The transcript is kept either way.
     public var notesError: String?
+    /// Capture or recording-write failures, retained even when transcription and notes finish.
+    public var captureWarnings: [String]?
+    /// Missing ASR spans, including their speaker, time interval and failure reason.
+    public var transcriptionWarnings: [String]?
     /// Nothing at all came from the Mac's audio, usually because System Audio Recording isn't allowed.
     public var othersSilent: Bool
     /// False once the recordings were pruned: the meeting keeps its transcript and notes but can't be redone.
@@ -52,7 +56,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         id: String, date: Date, duration: Double = 0, title: String? = nil, status: Status, turns: [MeetingTurn] = [],
-        notes: String? = nil, notesError: String? = nil, othersSilent: Bool = false, hasAudio: Bool = true
+        notes: String? = nil, notesError: String? = nil, othersSilent: Bool = false, hasAudio: Bool = true,
+        captureWarnings: [String]? = nil, transcriptionWarnings: [String]? = nil
     ) {
         self.id = id
         self.date = date
@@ -62,6 +67,8 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         self.turns = turns
         self.notes = notes
         self.notesError = notesError
+        self.captureWarnings = captureWarnings
+        self.transcriptionWarnings = transcriptionWarnings
         self.othersSilent = othersSilent
         self.hasAudio = hasAudio
     }
@@ -70,10 +77,24 @@ public struct Meeting: Codable, Equatable, Identifiable, Sendable {
         title ?? "Meeting, \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 
+    public var warnings: [String] { (captureWarnings ?? []) + (transcriptionWarnings ?? []) }
+
+    /// Notes must carry the same coverage limitations as the saved/exported transcript.
+    public var notesLines: [String] {
+        let warningLines = warnings.isEmpty ? [] :
+            ["Incomplete meeting transcript. Do not infer what was said in missing intervals; disclose these limitations in the notes."]
+            + warnings.map { "Coverage warning: \($0)" }
+        return warningLines + MeetingTranscript.lines(turns)
+    }
+
     /// Notes and transcript as one Markdown document.
     public var markdown: String {
         var out = "# \(displayTitle)\n\n"
         out += "\(date.formatted(date: .complete, time: .shortened)) · \(MeetingTranscript.timestamp(duration))\n\n"
+        if !warnings.isEmpty {
+            out += "## Recording and transcription warnings\n\n"
+            out += warnings.map { "- " + $0.replacingOccurrences(of: "\n", with: "\n  ") }.joined(separator: "\n") + "\n\n"
+        }
         if let notes { out += notes.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" }
         out += "## Transcript\n\n"
         out += turns.map { "**[\(MeetingTranscript.timestamp($0.start))] \($0.speaker.label):** \($0.text)" }
@@ -90,19 +111,16 @@ public enum MeetingTranscript {
         return (mine + them).sorted { ($0.start, $0.speaker == .them ? 1 : 0) < ($1.start, $1.speaker == .them ? 1 : 0) }
     }
 
-    /// A turn of mine is an echo when most of it happens while they speak, in turns that contain most of its
-    /// words: the speakers reach the microphone at once. A reply that reuses their words comes after them.
+    /// Only a whole, ordered duplicate with substantial overlap is safe to suppress. Partial matches
+    /// may omit a negation, amount or qualification, so uncertainty keeps both speakers' words.
     /// Short turns ("yes", "right") are always kept: too few words to tell.
     public static func isEcho(_ turn: MeetingTurn, of them: [MeetingTurn]) -> Bool {
-        guard words(turn.text).count >= 4 else { return false }
-        let mine = Set(contentWords(turn.text))
-        guard !mine.isEmpty else { return false }
-        let overlapping = them.filter { $0.start < turn.end && turn.start < $0.end }
-        let together = overlapping.reduce(0) { $0 + min($1.end, turn.end) - max($1.start, turn.start) }
-        guard together >= (turn.end - turn.start) / 2 else { return false }
-        let theirs = Set(overlapping.flatMap { contentWords($0.text) })
-        let shared = mine.intersection(theirs).count
-        return shared >= 2 && Double(shared) / Double(mine.count) >= 0.5
+        let mine = words(turn.text)
+        let duration = turn.end - turn.start
+        guard mine.count >= 4, duration > 0 else { return false }
+        return them.contains {
+            min($0.end, turn.end) - max($0.start, turn.start) >= duration / 2 && words($0.text) == mine
+        }
     }
 
     /// One line per turn, "[mm:ss] Me: …", as the notes are written from.
@@ -118,11 +136,11 @@ public enum MeetingTranscript {
     }
 
     static func words(_ text: String) -> [String] {
-        text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-    }
-
-    /// Words long enough to carry meaning in any language: "the", "di", "und" don't count as a match.
-    static func contentWords(_ text: String) -> [String] {
-        words(text).filter { $0.count >= 4 }
+        // Keep short words, contractions, numeric separators, signs and currency symbols.
+        let text = text.lowercased().replacingOccurrences(of: "’", with: "'")
+        let regex = try! NSRegularExpression(pattern: #"[\p{L}\p{M}\p{N}]+(?:['.,:/-][\p{L}\p{M}\p{N}]+)*|[\p{S}\-−%?!]"#)
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
+            Range($0.range, in: text).map { String(text[$0]) }
+        }
     }
 }

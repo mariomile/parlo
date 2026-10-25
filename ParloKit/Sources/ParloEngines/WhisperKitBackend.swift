@@ -26,14 +26,14 @@ enum WhisperKitBackend {
     }
 
     static func isInstalled(_ id: ModelID) -> Bool {
-        ["AudioEncoder.mlmodelc", "TextDecoder.mlmodelc", "MelSpectrogram.mlmodelc"].allSatisfy {
-            FileManager.default.fileExists(atPath: directory(id).appendingPathComponent($0).path)
-        }
+        WhisperModelFiles.isInstalled(at: directory(id))
     }
 
     static func install(_ id: ModelID, progress: @escaping @Sendable (Double) -> Void) async throws {
-        _ = try await WhisperKit.download(variant: variant(id), downloadBase: downloadBase, from: repo) {
-            progress($0.fractionCompleted)
+        try await WhisperModelFiles.install(at: directory(id)) {
+            _ = try await WhisperKit.download(variant: variant(id), downloadBase: downloadBase, from: repo) {
+                progress($0.fractionCompleted)
+            }
         }
     }
 

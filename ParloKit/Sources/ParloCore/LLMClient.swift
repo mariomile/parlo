@@ -50,14 +50,15 @@ public struct LLMClient: ChatCompleting {
     public func complete(system: String, user: String, timeout: TimeInterval) async throws -> String {
         var base = settings.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
-        guard let url = URL(string: base + "/chat/completions"), url.scheme != nil else { throw LLMError.invalidURL }
+        guard let url = URL(string: base + "/chat/completions"), let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme) else { throw LLMError.invalidURL }
 
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let apiKey, !apiKey.isEmpty {
-            let local = ["localhost", "127.0.0.1", "::1"].contains(url.host() ?? "")
-            guard url.scheme == "https" || local else { throw LLMError.insecureURL }
+            let local = ["localhost", "127.0.0.1", "::1"].contains(url.host()?.lowercased() ?? "")
+            guard scheme == "https" || local else { throw LLMError.insecureURL }
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONEncoder().encode(Request(

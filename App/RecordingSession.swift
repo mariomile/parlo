@@ -1,6 +1,28 @@
 import Foundation
 import ParloCore
 
+/// The selection is cached on the main actor before the task completes, so a synchronous termination
+/// save can include an already-resolved value without waiting for another task to copy it.
+final class CommandSelectionCapture {
+    private(set) var resolved: CommandSelection?
+    private var task: Task<CommandSelection, Never>?
+
+    init(read: @escaping @MainActor @Sendable () async -> CommandSelection) {
+        task = Task { [weak self] in
+            let result: CommandSelection
+            do { result = try await Deadline.run(seconds: 2) { await read() } }
+            catch { result = .unavailable }
+            self?.resolved = result
+            return result
+        }
+    }
+
+    func value() async -> CommandSelection {
+        if let resolved { return resolved }
+        return await task?.value ?? .unavailable
+    }
+}
+
 /// The microphone side of a dictation: one recording at a time, its live preview, and the short tail
 /// after fn is released.
 final class RecordingSession {
@@ -8,7 +30,7 @@ final class RecordingSession {
         let command: Bool
         let bundleID: String?
         /// Read when a command starts, before the user's focus can move.
-        let selection: Task<String?, Never>?
+        let selection: CommandSelectionCapture?
         let startedAt: Date
     }
 
@@ -46,12 +68,14 @@ final class RecordingSession {
     func start(
         command: Bool, deviceUID: String?, preview: (languageCode: String?, show: (String) -> Void)?
     ) throws {
+        let expectedPID = FrontmostApp.processID
         recorder.stop()
         sink.reset()
         try recorder.start(deviceUID: deviceUID)
         current = Recording(
             command: command, bundleID: FrontmostApp.bundleID,
-            selection: command ? Task { await SelectionReader.read() } : nil, startedAt: .now
+            selection: command ? CommandSelectionCapture { await SelectionReader.read(expectedPID: expectedPID) } : nil,
+            startedAt: .now
         )
         if let preview {
             previewer.start(languageCode: preview.languageCode, samples: { [weak self] in self?.sink.tail($0) ?? [] }) {
