@@ -6,14 +6,26 @@ import ParloCore
 final class HotkeyMonitor {
     var onAction: (HotkeyAction) -> Void = { _ in }
     private var tap: CFMachPort?
+    private var source: CFRunLoopSource?
     private var machine = HotkeyStateMachine()
 
-    var isRunning: Bool { tap != nil }
+    var isRunning: Bool {
+        guard let tap else { return false }
+        return CFMachPortIsValid(tap) && CGEvent.tapIsEnabled(tap: tap)
+    }
+
+    isolated deinit {
+        disposeTap()
+    }
 
     /// Returns false when macOS refuses the tap (Input Monitoring not granted yet).
     @discardableResult
     func start() -> Bool {
-        guard tap == nil else { return true }
+        if let tap, CFMachPortIsValid(tap) {
+            if !CGEvent.tapIsEnabled(tap: tap) { CGEvent.tapEnable(tap: tap, enable: true) }
+            if isRunning { return true }
+        }
+        disposeTap()
         let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue) | CGEventMask(1 << CGEventType.keyDown.rawValue)
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -23,11 +35,31 @@ final class HotkeyMonitor {
             callback: hotkeyTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else { return false }
-        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        guard let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            return false
+        }
+        self.tap = tap
+        self.source = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        self.tap = tap
+        guard isRunning else {
+            disposeTap()
+            return false
+        }
         return true
+    }
+
+    /// Retire the callback source before its unretained monitor pointer can become stale.
+    /// Tap recovery leaves the state machine intact so an active recording can still finish.
+    private func disposeTap() {
+        if let source {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            CFRunLoopSourceInvalidate(source)
+        }
+        if let tap { CFMachPortInvalidate(tap) }
+        source = nil
+        tap = nil
     }
 
     func reset() {
@@ -45,7 +77,7 @@ final class HotkeyMonitor {
     /// `keycode` is the event's key: Escape for a key press, Fn (63) or another modifier for a flags change.
     fileprivate func handle(type: CGEventType, flags: CGEventFlags, time: Double, fromHardware: Bool, keycode: Int64) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            start()
             return
         }
         if type == .keyDown {

@@ -116,6 +116,7 @@ The native seam regressions compile production recording, command, clipboard and
 
 ```sh
 python3 scripts/tests/test_native_audit.py
+python3 scripts/tests/test_hotkey_monitor.py  # tap recovery and idle release polling, with fake OS input
 ```
 
 ## Layout

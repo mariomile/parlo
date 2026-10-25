@@ -174,20 +174,22 @@ final class AppController {
         if models.states[id] == .installed, models.activeModelID == .appleSpeech { models.select(id) }
     }
 
-    /// The event tap can only be created once Input Monitoring is granted; retry until it is.
+    /// Keep checking after initial success: macOS can disable/invalidate an existing tap,
+    /// and release recovery must also run when a recording could not start.
     private func startHotkey() {
-        hotkeyActive = hotkey.start()
-        guard !hotkeyActive, tapRetryTimer == nil else { return }
-        tapRetryTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        retryHotkey()
+        guard tapRetryTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.retryHotkey() }
         }
+        tapRetryTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func retryHotkey() {
+        guard !isTerminating else { return }
         hotkeyActive = hotkey.start()
-        guard hotkeyActive else { return }
-        tapRetryTimer?.invalidate()
-        tapRetryTimer = nil
+        hotkey.poll()
     }
 
     var llm: (any ChatCompleting)? { settings.llm.client(apiKey: apiKey, local: localLLM) }
