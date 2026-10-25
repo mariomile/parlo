@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.1</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
@@ -35,10 +35,10 @@
 	<string>Parlo records your voice while you hold the dictation key or record a meeting, and transcribes it on this Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Parlo can use Apple's on-device speech recognition to transcribe your dictation.</string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
 	<key>SUAllowsAutomaticUpdates</key>
 	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://github.com/mariomile/parlo/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
