@@ -96,7 +96,38 @@ elif [[ $has_tag == false && $(git log -1 --format=%s) != "chore(release): $vers
 fi
 
 if [[ $version_changed == true || ! -f "$dist/source-commit" ]]; then
+  cp ParloKit/Package.resolved "$verification_dir/Package.resolved"
   ./scripts/build.sh
+  # Xcode can write the app's combined graph into the local package lock. Preserve the
+  # package's bytes only when all existing pins are unchanged and the sole addition
+  # is the app's explicitly pinned Sparkle dependency. Real resolution changes fail.
+  sparkle_version=$(sed -n '/^  Sparkle:/,/^[^ ]/s/^    exactVersion: //p' project.yml)
+  python3 - "$verification_dir/Package.resolved" ParloKit/Package.resolved "$sparkle_version" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+saved, current = map(Path, sys.argv[1:3])
+before, after = json.loads(saved.read_bytes()), json.loads(current.read_bytes())
+def pins(document):
+    values = document.pop("pins")
+    result = {pin["identity"]: pin for pin in values}
+    if len(result) != len(values):
+        raise SystemExit("Duplicate dependency pins; lockfile preserved for inspection.")
+    document.pop("originHash", None)
+    return result
+old_pins, new_pins = pins(before), pins(after)
+extra = new_pins.get("sparkle") if "sparkle" not in old_pins else None
+if extra is not None and extra.get("kind") == "remoteSourceControl" and \
+        extra.get("location") == "https://github.com/sparkle-project/Sparkle" and \
+        extra.get("state", {}).get("version") == sys.argv[3]:
+    del new_pins["sparkle"]
+if before != after or old_pins != new_pins:
+    raise SystemExit("Unexpected dependency changes; lockfile preserved for inspection.")
+if current.read_bytes() != saved.read_bytes():
+    current.write_bytes(saved.read_bytes())
+    print("Preserved package lock after Xcode graph normalization.")
+PY
   sparkle=build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
   [[ $($sparkle/generate_keys --account parlo -p) == $public_key ]] || { echo "Signing key does not match SUPublicEDKey."; exit 1; }
   app=build/DerivedData/Build/Products/Release/Parlo.app
