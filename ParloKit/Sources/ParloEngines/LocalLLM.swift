@@ -21,6 +21,9 @@ public final class LocalLLM {
 
     let directory: URL
     private let loaded = SharedLoad<URL, ModelContainer>()
+    private var systemPrefix = LocalPromptCache<LocalSystemPrefix>()
+    // A weak identity witness avoids retaining unloaded model weights or reusing a recycled identity.
+    private weak var prefixContainer: ModelContainer?
 
     public convenience init() {
         self.init(directory: HubSnapshot.directory(CleanupModel.folder))
@@ -41,11 +44,95 @@ public final class LocalLLM {
     public var client: LocalLLMClient { LocalLLMClient(llm: self) }
 
     func container() async throws -> ModelContainer {
-        guard HubSnapshot.isInstalled(directory) else { throw LocalLLMError.notInstalled }
+        guard HubSnapshot.isInstalled(directory) else {
+            clearSystemPrefix()
+            throw LocalLLMError.notInstalled
+        }
         let directory = directory
         // A one-off call (the connection test) doesn't keep the model in memory.
         guard keepsLoaded else { return try await Self.load(directory) }
         return try await loaded.value(directory) { try await Self.load(directory) }
+    }
+
+    /// Each completion owns its session and mutable KV copies; only system tokens are reusable.
+    func complete(system: String, user: String) async throws -> String {
+        let container = try await container()
+        try Task.checkCancellation()
+        var prefix: LocalSystemPrefix?
+        if keepsLoaded {
+            if prefixContainer !== container {
+                clearSystemPrefix()
+                prefixContainer = container
+            }
+            let ticket = systemPrefix.select(container: ObjectIdentifier(container), system: system)
+            let existing = systemPrefix.value(for: ticket)
+            prefix = try await container.perform { context in
+                try Task.checkCancellation()
+                guard context.model is Qwen3Model,
+                      let tokenizer = context.tokenizer as? TokenizerBridge else { return nil as LocalSystemPrefix? }
+                do {
+                    let tokens = try tokenizer.upstream.applyChatTemplate(
+                        messages: [["role": "system", "content": system]], chatTemplate: nil,
+                        addGenerationPrompt: false, truncation: false, maxLength: nil, tools: nil)
+                    // Use the actual processor used by ChatSession, including its message generator.
+                    // Prove the split anew for every user input; template/BPE boundaries may differ.
+                    let fragment = try await context.processor.prepare(input: UserInput(chat: [.user(user)]))
+                    let full = try await context.processor.prepare(input: UserInput(chat: [.system(system), .user(user)]))
+                    guard LocalPromptCache<LocalSystemPrefix>.allows(
+                        prefix: tokens, fragment: fragment.text.tokens.asArray(Int.self),
+                        full: full.text.tokens.asArray(Int.self)) else { return nil }
+                    try Task.checkCancellation()
+                    if let existing { return existing }
+                    let cache = try context.model.newCache(parameters: GenerateParameters(temperature: 0))
+                    // Restrict copying to the supported independent cache implementation.
+                    guard cache.allSatisfy({ $0 is KVCacheSimple }) else { return nil }
+                    let output = context.model(
+                        LMInput.Text(tokens: MLXArray(tokens).expandedDimensions(axis: 0)),
+                        cache: cache, state: nil)
+                    guard output.state == nil else { return nil }
+                    // Only KV is retained. Evaluating the discarded vocabulary projection for
+                    // every system token adds cold latency and a large temporary allocation.
+                    for layer in cache { eval(layer.state) }
+                    try Task.checkCancellation()
+                    return LocalSystemPrefix(cache: cache)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // A template that cannot prove an exact split uses the ordinary fresh path.
+                    return nil
+                }
+            }
+            // Deadline cancellation and lifecycle changes must not publish stale native work.
+            if let prefix { systemPrefix.publish(prefix, ticket: ticket, isCancelled: Task.isCancelled) }
+        }
+        try Task.checkCancellation()
+        let reply = try await Self.respond(
+            container: container, system: system, user: user,
+            prefix: prefix)
+        try Task.checkCancellation()
+        return reply
+    }
+
+    // Construct and use the non-Sendable session on the same nonisolated execution path.
+    // The frozen system prefix is Sendable; mutable copies and the session stay request-local.
+    private nonisolated static func respond(
+        container: ModelContainer, system: String, user: String,
+        prefix: LocalSystemPrefix?
+    ) async throws -> String {
+        let session: ChatSession
+        if let prefix {
+            session = ChatSession(container, promptCache: prefix.requestSnapshot(),
+                                  generateParameters: GenerateParameters(temperature: 0))
+        } else {
+            session = ChatSession(container, instructions: system,
+                                  generateParameters: GenerateParameters(temperature: 0))
+        }
+        return try await session.respond(to: user)
+    }
+
+    private func clearSystemPrefix() {
+        systemPrefix.clear()
+        prefixContainer = nil
     }
 
     /// Runs `work` with the model loaded once for all its requests, then frees it unless cleanup uses it.
@@ -61,6 +148,7 @@ public final class LocalLLM {
 
     /// Frees the memory the model holds, about its size on disk.
     private func unload() {
+        clearSystemPrefix()
         loaded.clear()
         Memory.clearCache()
     }
@@ -68,6 +156,7 @@ public final class LocalLLM {
     /// Loads the model in the background so the first cleanup is fast, or frees it when cleanup stops using it.
     private func sync() {
         guard keepsLoaded, files.state == .installed else {
+            clearSystemPrefix()
             if !loaded.isEmpty { unload() }
             return
         }
@@ -90,9 +179,7 @@ public struct LocalLLMClient: ChatCompleting {
         do {
             // A load cut short by the timeout keeps going, so the next cleanup finds the model ready.
             reply = try await Deadline.run(seconds: timeout) {
-                let container = try await llm.container()
-                let session = ChatSession(container, instructions: system, generateParameters: GenerateParameters(temperature: 0))
-                return try await session.respond(to: user)
+                try await llm.complete(system: system, user: user)
             }
         } catch is DeadlineExceeded {
             throw LocalLLMError.timedOut
@@ -147,5 +234,25 @@ struct TokenizerBridge: MLXLMCommon.Tokenizer {
         } catch Tokenizers.TokenizerError.missingChatTemplate {
             throw MLXLMCommon.TokenizerError.missingChatTemplate
         }
+    }
+}
+
+/// Evaluated, system-only KV objects are frozen after construction. They are never given to a
+/// session: requestSnapshot makes fresh mutable objects via the public copy contract. Array
+/// materialization happens before crossing container isolation. Concurrent snapshot creation
+/// only reads the frozen KVCacheSimple objects; copy() never mutates its source. Each caller
+/// evaluates and exclusively owns its copies. This box never contains model weights, user
+/// tokens, or generated conversation state.
+private final class LocalSystemPrefix: @unchecked Sendable {
+    private let cache: [any KVCache]
+
+    init(cache: [any KVCache]) {
+        self.cache = cache
+    }
+
+    func requestSnapshot() -> PromptCacheSnapshot {
+        let copies = cache.map { $0.copy() }
+        for layer in copies { eval(layer.state) }
+        return PromptCacheSnapshot(cache: copies)
     }
 }

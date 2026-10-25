@@ -146,6 +146,18 @@ import Testing
         #expect(TranscriptionJob.cleanupTimeout(for: String(repeating: "parola ", count: 300)) > 20)
     }
 
+    @Test func localSentenceUsesAnInteractiveCleanupDeadline() async throws {
+        var localSettings = settings
+        localSettings.llm.provider = .local
+        let llm = FakeLLM { _, _ in "Ci vediamo domani." }
+        let job = TranscriptionJob(transcriber: FakeTranscriber(text: "ci vediamo domani"), llm: llm,
+                                   settings: localSettings, speech: nil)
+        _ = try await job.run(oneSecond, .dictation(bundleID: nil))
+        #expect(llm.calls.count == 1)
+        #expect(llm.calls[0].timeout >= 2)
+        #expect(llm.calls[0].timeout < 3)
+    }
+
     @Test func textTooLongSkipsCleanup() async throws {
         let llm = FakeLLM { _, _ in "x" }
         let long = String(repeating: "parola ", count: TranscriptionJob.cleanupMaxCharacters / 7 + 1)

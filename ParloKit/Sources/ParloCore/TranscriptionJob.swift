@@ -31,9 +31,10 @@ public struct TranscriptionJob: Sendable {
     /// Longer text is pasted without AI cleanup. Covers the longest hands-free dictation (ten minutes).
     public static let cleanupMaxCharacters = 10_000
 
-    /// Time the LLM gets to clean up `text`: 5 s for a sentence, more for minutes of hands-free dictation.
-    public static func cleanupTimeout(for text: String) -> TimeInterval {
-        5 + Double(text.count) / 100
+    /// Local cleanup gets an interactive deadline; long dictations still get time proportional
+    /// to their output. Hosted providers retain their existing network allowance.
+    public static func cleanupTimeout(for text: String, provider: LLMProvider = .apple) -> TimeInterval {
+        provider == .local ? 2 + Double(text.count) / 200 : 5 + Double(text.count) / 100
     }
 
     /// Time the engine gets for `seconds` of audio: slower than every engine we ship.
@@ -120,7 +121,8 @@ public struct TranscriptionJob: Sendable {
         )
         do {
             let reply = try await llm.complete(
-                system: system, user: PromptBuilder.cleanupUserMessage(encoded), timeout: Self.cleanupTimeout(for: encoded)
+                system: system, user: PromptBuilder.cleanupUserMessage(encoded),
+                timeout: Self.cleanupTimeout(for: encoded, provider: settings.llm.provider)
             )
             guard let cleaned = CleanupOutput.accepted(reply, input: encoded) else {
                 return .text(uncleaned, warning: "Cleanup output looked wrong")
