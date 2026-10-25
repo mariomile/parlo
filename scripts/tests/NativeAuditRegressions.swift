@@ -134,6 +134,54 @@ func expectFailedMeetingRetry(_ meeting: Meeting?, from original: Meeting, newWa
             guard case .pasted = await TextInserter.insert("world") else { throw AuditFailure(description: "Exact insertion not recognized") }
             try expect(NSPasteboard.general.string(forType: .string) == "USER_CLIPBOARD", "Verified insertion failed to restore clipboard")
         }
+        try await test("Paste feedback: unavailable field readback quietly dismisses the HUD and keeps recovery text") {
+            let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
+            let c = Fixtures.controller(in: dir)
+            await c.deliver("DICTATED_TEXT", warning: nil, if: { true })
+            try expect(KeyPoster.posts.count == 1, "Expected exactly one paste request")
+            try expect(c.messages == [nil], "Unverified insertion showed a routine warning or claimed verified success")
+            try expect(NSPasteboard.general.string(forType: .string) == "DICTATED_TEXT", "Unverified paste lost its recovery text")
+        }
+        try await test("Paste feedback: unavailable readback does not mask an AI cleanup warning") {
+            let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
+            let c = Fixtures.controller(in: dir)
+            let warning = "AI cleanup wasn't used: Request timed out"
+            await c.deliver("RAW_TRANSCRIPT", warning: warning, if: { true })
+            try expect(c.messages == [.message(warning, isError: true)], "Unverified paste masked an actionable cleanup warning")
+            try expect(NSPasteboard.general.string(forType: .string) == "RAW_TRANSCRIPT", "Raw transcript is unavailable for recovery")
+        }
+        try await test("Paste feedback: verified insertion still confirms completion") {
+            let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
+            let c = Fixtures.controller(in: dir)
+            FocusedElement.values[1] = "Hello "
+            FocusedElement.ranges[1] = CFRange(location: 6, length: 0)
+            KeyPoster.onPaste = { FocusedElement.values[1] = "Hello world" }
+            await c.deliver("world", warning: nil, if: { true })
+            try expect(c.messages == [.done], "Verified insertion lost its completion feedback")
+            try expect(NSPasteboard.general.string(forType: .string) == "USER_CLIPBOARD", "Verified insertion failed to restore clipboard")
+        }
+        try await test("Paste feedback: missing target and changed target still explain manual recovery") {
+            let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
+            let c = Fixtures.controller(in: dir)
+            FocusedElement.focus = .nothing
+            await c.deliver("RESULT", warning: nil, if: { true })
+            try expect(c.messages == [.message("No text field to paste into. \(ControllerProbe.copiedHint)", isError: false)], "Missing target was silenced")
+            Fixtures.resetDesktop(); c.messages = []
+            await c.deliver("RESULT", warning: nil, expectedPID: 20, if: { true })
+            try expect(c.messages == [.message("The target changed. \(ControllerProbe.copiedHint)", isError: false)], "Changed target was silenced")
+            try expect(KeyPoster.posts.isEmpty, "Changed target received a paste")
+        }
+        try await test("Paste feedback: overwritten clipboard still warns about recovery in Recent") {
+            let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
+            let c = Fixtures.controller(in: dir)
+            KeyPoster.onPaste = {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("OTHER_COPY", forType: .string)
+            }
+            await c.deliver("RESULT", warning: nil, if: { true })
+            try expect(c.messages == [.message("Insertion couldn't be verified. The text is in Recent, in the menu bar.", isError: true)], "Lost clipboard recovery was silenced")
+            try expect(NSPasteboard.general.string(forType: .string) == "OTHER_COPY", "Concurrent clipboard content was overwritten")
+        }
         try await test("R09 queued Retry deletion prevents ASR and obsolete recovery messages") {
             let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
             let engine = HeldTranscriber(), c = Fixtures.controller(in: dir, transcriber: engine)

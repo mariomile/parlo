@@ -608,7 +608,9 @@ final class AppController {
             show(warning.map { .message($0, isError: true) } ?? .done)
             watchForCorrection(of: text, in: field)
         case .leftOnClipboard:
-            show(.message("Paste sent; insertion couldn't be verified. The text is still on the clipboard.", isError: false))
+            // Many editors cannot expose an exact AX readback after a successful paste. Dismiss
+            // routine feedback without claiming verified insertion; the clipboard remains available.
+            show(warning.map { .message($0, isError: true) })
         case .noTarget:
             show(.message("No text field to paste into. \(Self.copiedHint)", isError: false))
         case .targetChanged:
