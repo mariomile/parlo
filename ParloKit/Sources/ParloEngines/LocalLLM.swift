@@ -10,7 +10,7 @@ import Tokenizers
 @MainActor
 public final class LocalLLM {
     public let files: Installable
-    /// Whether AI cleanup is set to this model: it stays loaded only while it is.
+    /// Whether AI cleanup is set to this model: it is loaded only while it is, and freed after `idleTimeout` unused.
     public var inUse = false {
         didSet { if inUse != oldValue { sync() } }
     }
@@ -18,6 +18,11 @@ public final class LocalLLM {
     /// Work running with the model held in memory even when cleanup doesn't use it, such as meeting notes.
     private var holds = 0
     private var keepsLoaded: Bool { inUse || holds > 0 }
+    /// Completions running now: the model is never freed under them.
+    private var active = 0
+    /// The model takes about its size on disk in GPU memory, so it doesn't stay there between bursts of dictation.
+    let idleTimeout: Duration
+    private var idleUnload: Task<Void, Never>?
 
     let directory: URL
     private let loaded = SharedLoad<URL, ModelContainer>()
@@ -29,8 +34,9 @@ public final class LocalLLM {
         self.init(directory: HubSnapshot.directory(CleanupModel.folder))
     }
 
-    init(directory: URL) {
+    init(directory: URL, idleTimeout: Duration = .seconds(180)) {
         self.directory = directory
+        self.idleTimeout = idleTimeout
         files = Installable(
             isInstalled: { HubSnapshot.isInstalled(directory) },
             install: { try await HubSnapshot.install(
@@ -43,6 +49,14 @@ public final class LocalLLM {
 
     public var client: LocalLLMClient { LocalLLMClient(llm: self) }
 
+    var isLoaded: Bool { !loaded.isEmpty }
+
+    /// Starts loading when a dictation starts, so the model is ready by the time its cleanup runs.
+    public func warmUp() {
+        guard inUse else { return }
+        sync()
+    }
+
     func container() async throws -> ModelContainer {
         guard HubSnapshot.isInstalled(directory) else {
             clearSystemPrefix()
@@ -51,11 +65,19 @@ public final class LocalLLM {
         let directory = directory
         // A one-off call (the connection test) doesn't keep the model in memory.
         guard keepsLoaded else { return try await Self.load(directory) }
-        return try await loaded.value(directory) { try await Self.load(directory) }
+        // Awaited without cancelling it: a cleanup cut short by its deadline leaves the shared load
+        // (often the warm-up started with the dictation) running, so the next cleanup finds the model ready.
+        return try await loaded.start(directory) { try await Self.load(directory) }.value
     }
 
     /// Each completion owns its session and mutable KV copies; only system tokens are reusable.
     func complete(system: String, user: String) async throws -> String {
+        active += 1
+        idleUnload?.cancel()
+        defer {
+            active -= 1
+            scheduleIdleUnload()
+        }
         let container = try await container()
         try Task.checkCancellation()
         var prefix: LocalSystemPrefix?
@@ -156,12 +178,26 @@ public final class LocalLLM {
     /// Loads the model in the background so the first cleanup is fast, or frees it when cleanup stops using it.
     private func sync() {
         guard keepsLoaded, files.state == .installed else {
+            idleUnload?.cancel()
             clearSystemPrefix()
             if !loaded.isEmpty { unload() }
             return
         }
         let directory = directory
         loaded.start(directory) { try await Self.load(directory) }
+        scheduleIdleUnload()
+    }
+
+    /// Frees the model once nothing has used it for `idleTimeout`. Work holding it, or a completion running, restarts the wait when it ends.
+    private func scheduleIdleUnload() {
+        idleUnload?.cancel()
+        guard holds == 0, active == 0, !loaded.isEmpty else { return }
+        let idleTimeout = idleTimeout
+        idleUnload = Task { [weak self] in
+            try? await Task.sleep(for: idleTimeout)
+            guard !Task.isCancelled, let self, holds == 0, active == 0 else { return }
+            unload()
+        }
     }
 
     private nonisolated static func load(_ directory: URL) async throws -> ModelContainer {

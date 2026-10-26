@@ -301,6 +301,7 @@ final class AppController {
             return
         }
         hud.show(.recording(command: command))
+        localLLM.warmUp()
     }
 
     /// Double tap: the recording the first tap started keeps going hands-free, or a new one starts if it already stopped.

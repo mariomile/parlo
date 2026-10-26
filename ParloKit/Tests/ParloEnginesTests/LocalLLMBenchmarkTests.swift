@@ -129,6 +129,52 @@ struct LocalLLMBenchmarkTests {
         #expect(try await llm.client.complete(system: system, user: user, timeout: 20) == expected)
     }
 
+    /// The model leaves memory once idle and comes back for the next cleanup, with the same output.
+    @MainActor @Test func idleModelIsFreedAndReloads() async throws {
+        let llm = LocalLLM(directory: HubSnapshot.directory(CleanupModel.folder), idleTimeout: .seconds(3))
+        guard HubSnapshot.isInstalled(llm.directory) else { try Test.cancel("Local cleanup model is not installed") }
+        await llm.files.refresh() // The app does this at launch; warm-up needs it.
+        llm.inUse = true
+        defer { llm.inUse = false }
+        let system = PromptBuilder.cleanupSystemPrompt(style: .neutral, dictionary: [], hasPlaceholders: false)
+        let user = PromptBuilder.cleanupUserMessage(Self.transcripts[0])
+        let timeout = TranscriptionJob.cleanupTimeout(for: user, provider: .local)
+        let expected = try await llm.client.complete(system: system, user: user, timeout: 20)
+        #expect(llm.isLoaded)
+
+        var start = ContinuousClock.now
+        _ = try await llm.client.complete(system: system, user: user, timeout: timeout)
+        print("[idle] warm cleanup: \(ContinuousClock.now - start)")
+
+        try await Task.sleep(for: .seconds(4))
+        #expect(!llm.isLoaded)
+        start = ContinuousClock.now
+        #expect(try await llm.client.complete(system: system, user: user, timeout: 20) == expected)
+        print("[idle] cold cleanup after unload: \(ContinuousClock.now - start)")
+        #expect(llm.isLoaded)
+
+        // A dictation warms the model up while the user speaks: its cleanup then fits the interactive deadline.
+        try await Task.sleep(for: .seconds(4))
+        #expect(!llm.isLoaded)
+        llm.warmUp()
+        #expect(llm.isLoaded)
+        try await Task.sleep(for: .seconds(1.5))
+        start = ContinuousClock.now
+        #expect(try await llm.client.complete(system: system, user: user, timeout: timeout) == expected)
+        print("[idle] cleanup after warm-up and 1.5 s of speech: \(ContinuousClock.now - start) (deadline \(timeout) s)")
+
+        // A cleanup that runs out of time while the model loads doesn't cancel the load.
+        try await Task.sleep(for: .seconds(4))
+        #expect(!llm.isLoaded)
+        await #expect(throws: LocalLLMError.self) {
+            try await llm.client.complete(system: system, user: user, timeout: 0.01)
+        }
+        #expect(llm.isLoaded)
+        try await Task.sleep(for: .seconds(2.5))
+        #expect(llm.isLoaded)
+        #expect(try await llm.client.complete(system: system, user: user, timeout: timeout) == expected)
+    }
+
     @MainActor @Test(arguments: directories)
     func cleanup(directory: URL) async throws {
         let name = directory.lastPathComponent
