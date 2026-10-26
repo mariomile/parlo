@@ -74,9 +74,11 @@ final class HUDController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.collectionBehavior = Self.behavior
         panel.contentView = NSHostingView(rootView: IslandView(model: model))
     }
+
+    private static let behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
     func show(_ state: HUDModel.State) {
         hideTask?.cancel()
@@ -92,8 +94,15 @@ final class HUDController {
             // Start folded inside the notch so the first frame is invisible, then grow out of it.
             model.state = .hidden
             place()
+            // When an app leaves full screen while the island is hidden, macOS pins the window to one desktop
+            // and AppKit never notices, so it would open on the wrong Space. Bringing it in as a
+            // move-to-active-Space window, then restoring every Space once it is on screen, re-registers it.
+            panel.collectionBehavior = Self.behavior.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
             panel.orderFrontRegardless()
-            DispatchQueue.main.async { self.model.state = state }
+            DispatchQueue.main.async {
+                self.panel.collectionBehavior = Self.behavior
+                self.model.state = state
+            }
         }
         switch state {
         case .done: hide(after: 0.9)
