@@ -69,6 +69,7 @@ final class RecordingSession {
         command: Bool, deviceUID: String?, preview: (languageCode: String?, show: (String) -> Void)?
     ) throws {
         let expectedPID = FrontmostApp.processID
+        if let expectedPID { Task { await FocusedElement.wake(expectedPID) } }
         recorder.stop()
         sink.reset()
         try recorder.start(deviceUID: deviceUID)

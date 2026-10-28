@@ -160,6 +160,13 @@ func expectFailedMeetingRetry(_ meeting: Meeting?, from original: Meeting, newWa
             try expect(c.messages == [.done], "Verified insertion lost its completion feedback")
             try expect(NSPasteboard.general.string(forType: .string) == "USER_CLIPBOARD", "Verified insertion failed to restore clipboard")
         }
+        try await test("Recording start wakes the target app's accessibility so its text field is found at paste time") {
+            let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
+            let c = Fixtures.controller(in: dir)
+            FrontmostApp.processID = 42
+            try c.session.start(command: false, deviceUID: nil, preview: nil)
+            try await eventually { FocusedElement.woken == [42] }
+        }
         try await test("Paste feedback: missing target and changed target still explain manual recovery") {
             let dir = try Fixtures.directory(); defer { try? FileManager.default.removeItem(at: dir) }
             let c = Fixtures.controller(in: dir)

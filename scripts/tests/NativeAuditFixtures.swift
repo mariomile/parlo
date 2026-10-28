@@ -70,7 +70,10 @@ enum FocusedElement {
     static var holdFocus: (() async -> Void)?
     static var holdSelection: (() async -> Void)?
 
-    static func current() async -> (field: WatchedField?, focus: PasteTarget.Focus) {
+    static var woken: [pid_t] = []
+
+    static func wake(_ pid: pid_t) async { woken.append(pid) }
+    static func current(waking pid: pid_t?) async -> (field: WatchedField?, focus: PasteTarget.Focus) {
         let snapshot = (field, focus)
         await holdFocus?()
         return snapshot
@@ -317,6 +320,7 @@ enum Fixtures {
         FocusedElement.field = WatchedField(id: 1); FocusedElement.focus = .unknown
         FocusedElement.values = [:]; FocusedElement.ranges = [:]; FocusedElement.selected = ""
         FocusedElement.selectionResult = .unavailable; FocusedElement.holdFocus = nil; FocusedElement.holdSelection = nil
+        FocusedElement.woken = []
         KeyPoster.posts = []; KeyPoster.onPaste = {}
         AudioFileDecoder.reads = 0; AudioFileDecoder.hold = nil
         AudioFileDecoder.unreadableTracks = []; AudioFileDecoder.trackSamples = [:]

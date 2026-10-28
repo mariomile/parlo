@@ -95,7 +95,7 @@ enum TextInserter {
     ) async -> Outcome {
         guard isCurrent() else { return .cancelled }
         let pid = selection?.processID ?? expectedPID ?? FrontmostApp.processID
-        let target = await FocusedElement.current()
+        let target = await FocusedElement.current(waking: pid)
         let expectedValue = await target.field?.valueByInserting(text)
         guard isCurrent() else { return .cancelled }
 
@@ -172,8 +172,8 @@ nonisolated enum FocusedElement {
     /// Larger fields aren't read back: comparing them every few seconds isn't worth it.
     static let maxReadLength = 100_000
 
-    @concurrent static func current() async -> (field: WatchedField?, focus: PasteTarget.Focus) {
-        guard let element = focused() else { return (nil, focusError()) }
+    @concurrent static func current(waking pid: pid_t?) async -> (field: WatchedField?, focus: PasteTarget.Focus) {
+        guard let element = await focusedWaking(pid) else { return (nil, focusError()) }
         var settable: DarwinBoolean = false
         AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
         let focus = PasteTarget.Focus.element(
@@ -194,6 +194,27 @@ nonisolated enum FocusedElement {
         return (value as! AXUIElement)
     }
 
+    /// Electron apps (Obsidian, Slack, Linear, Cursor, T3 Code) build their accessibility tree only when
+    /// an assistive app asks for it, and take about 2 s. Until then focus reads as nothing, even inside a
+    /// text field. Asked when recording starts, so the tree is ready by the time the text is pasted.
+    @concurrent static func wake(_ pid: pid_t) async {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.25)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    }
+
+    /// An app woken just now, by a short dictation or a paste from history, still gets its 2 s.
+    private static func focusedWaking(_ pid: pid_t?) async -> AXUIElement? {
+        if let element = focused() { return element }
+        guard let pid, focusError() == .nothing else { return nil }
+        await wake(pid)
+        for _ in 0..<25 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if let element = focused() { return element }
+        }
+        return nil
+    }
+
     /// Why `focused()` found nothing: no focus at all, or no answer.
     private static func focusError() -> PasteTarget.Focus {
         var value: CFTypeRef?
@@ -203,7 +224,7 @@ nonisolated enum FocusedElement {
     }
 
     @concurrent static func selection(expectedPID: pid_t) async -> CommandSelection {
-        guard let element = focused(), processID(element) == expectedPID, !isSecure(element),
+        guard let element = await focusedWaking(expectedPID), processID(element) == expectedPID, !isSecure(element),
               let text = selectedText(element), text.count <= maxReadLength else { return .unavailable }
         let context = SelectionContext(
             field: WatchedField(element: element), processID: expectedPID,
