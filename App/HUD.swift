@@ -61,6 +61,7 @@ final class HUDController {
     let model = HUDModel()
     private let panel: IslandPanel
     private var hideTask: Task<Void, Never>?
+    private var spaceObserver: (any NSObjectProtocol)?
     private static let panelSize = NSSize(width: 720, height: 200)
 
     init() {
@@ -76,6 +77,12 @@ final class HUDController {
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = Self.behavior
         panel.contentView = NSHostingView(rootView: IslandView(model: model))
+        // Switching to a full-screen app mid-dictation can leave the open island behind on the old Space.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followActiveSpace() }
+        }
     }
 
     private static let behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -88,21 +95,16 @@ final class HUDController {
             model.handsFree = false
             model.liveText = ""
         }
-        if panel.isVisible {
+        // A window still ordered in counts as visible even when it was left on another Space (a message or
+        // the fold-out of the previous dictation, then a switch to a full-screen app): only reuse it when
+        // it is on the Space the user is looking at.
+        if panel.isVisible && panel.isOnActiveSpace {
             model.state = state
         } else {
             // Start folded inside the notch so the first frame is invisible, then grow out of it.
             model.state = .hidden
             place()
-            // When an app leaves full screen while the island is hidden, macOS pins the window to one desktop
-            // and AppKit never notices, so it would open on the wrong Space. Bringing it in as a
-            // move-to-active-Space window, then restoring every Space once it is on screen, re-registers it.
-            panel.collectionBehavior = Self.behavior.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
-            panel.orderFrontRegardless()
-            DispatchQueue.main.async {
-                self.panel.collectionBehavior = Self.behavior
-                self.model.state = state
-            }
+            bringToActiveSpace { self.model.state = state }
         }
         switch state {
         case .done: hide(after: 0.9)
@@ -123,6 +125,24 @@ final class HUDController {
             try? await Task.sleep(for: .seconds(0.5))
             guard !Task.isCancelled, model.state == .hidden else { return }
             panel.orderOut(nil)
+        }
+    }
+
+    private func followActiveSpace() {
+        guard panel.isVisible, !panel.isOnActiveSpace else { return }
+        place()
+        bringToActiveSpace()
+    }
+
+    /// When an app leaves full screen while the island is hidden, macOS pins the window to one desktop
+    /// and AppKit never notices, so it would open on the wrong Space. Bringing it in as a
+    /// move-to-active-Space window, then restoring every Space once it is on screen, re-registers it.
+    private func bringToActiveSpace(then shown: @escaping () -> Void = {}) {
+        panel.collectionBehavior = Self.behavior.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
+        panel.orderFrontRegardless()
+        DispatchQueue.main.async {
+            self.panel.collectionBehavior = Self.behavior
+            shown()
         }
     }
 

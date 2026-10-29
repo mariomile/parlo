@@ -95,7 +95,7 @@ Pure logic lives in the `ParloCore` package target and is unit-tested; engine wr
 **Pure logic (unit-tested)**
 - `PromptBuilder`: system prompt from base cleanup rules + style + dictionary terms. Separate builder for command mode.
 - `StyleResolver`: bundle ID → style (formal, casual, very casual, technical, neutral). User table over built-in defaults (Mail formal, Slack casual, Messages very casual, Cursor/Xcode/Terminal technical); unknown apps get neutral.
-- `DictionaryReplacer`: case-insensitive whole-word "heard as → write as" replacements. `CorrectionDetector` and `SuggestionInbox` propose dictionary entries from edits made right after a paste.
+- `DictionaryReplacer`: case-insensitive whole-word "heard as → write as" replacements. `CorrectionDetector` spots a word fixed right after a paste and `DictionaryLearner` saves it to the dictionary.
 - `SnippetCodec`: replaces trigger phrases with placeholder tokens before the LLM and expands them after. Matching ignores case and punctuation.
 - `VoiceFormatting`: spoken layout commands. `CleanupOutput` rejects cleanup replies that look wrong.
 - `RecordingGuard`: discards recordings shorter than 0.3 s.
@@ -105,7 +105,7 @@ Pure logic lives in the `ParloCore` package target and is unit-tested; engine wr
 Settings, styles table, dictionary and snippets as JSON in `~/Library/Application Support/Parlo/settings.json`. History in `.../History`, meetings in `.../Meetings`. API key in Keychain. No database.
 
 **UI**
-Menu bar window: status, active model, language, AI cleanup toggle, meeting start/stop and list, dictionary suggestions, Recent dictations with copy and retry, Settings, Permissions, Quit. Settings tabs: General (shortcuts, language, microphone, open at login, permissions), Models, AI, Styles, Dictionary, Snippets. History window and Meetings window. First-run window: permissions checklist and the Parakeet v3 download offer.
+Menu bar window: status, active model, language, AI cleanup toggle, meeting start/stop and list, Recent dictations with copy and retry, Settings, Permissions, Quit. Settings tabs: General (shortcuts, language, microphone, open at login, permissions), Models, AI, Styles, Dictionary, Snippets. History window and Meetings window. First-run window: permissions checklist and the Parakeet v3 download offer.
 
 ## Data flow
 

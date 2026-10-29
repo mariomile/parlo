@@ -72,7 +72,7 @@ enum TextInserter {
         /// The expected field changed to the exact text produced by replacing its selection.
         case pasted(WatchedField)
         /// A paste was sent but insertion could not be verified. Keep the text available for a manual paste.
-        case leftOnClipboard
+        case leftOnClipboard(WatchedField?)
         case noTarget
         case targetChanged
         /// Insertion wasn't verified, and something else wrote the clipboard meanwhile.
@@ -134,7 +134,7 @@ enum TextInserter {
             guard pb.changeCount == ours else { return .lost }
             try? await Task.sleep(for: .milliseconds(20))
         }
-        return pb.changeCount == ours ? .leftOnClipboard : .lost
+        return pb.changeCount == ours ? .leftOnClipboard(target.field) : .lost
     }
 }
 
@@ -310,12 +310,12 @@ nonisolated struct WatchedField: @unchecked Sendable { // AXUIElement can be use
         FocusedElement.text(element) == expected
     }
 
-    /// The field's text right after the paste, and again after 30 s or as soon as the user leaves the
+    /// The field's text right after the paste, and again after 60 s or as soon as the user leaves the
     /// field or changes the text around the paste (a sent message, a cleared field).
     @concurrent func edit(of pasted: String) async -> (before: String, after: String)? {
         guard let before = FocusedElement.text(element), before.contains(pasted) else { return nil }
         var after = before
-        for _ in 0..<15 {
+        for _ in 0..<30 {
             do { try await Task.sleep(for: .seconds(2)) } catch { break }
             guard let now = FocusedElement.focused(), CFEqual(now, element),
                   let text = FocusedElement.text(element),
