@@ -28,8 +28,6 @@ final class AppController {
     private(set) var settingsProblem: String?
     private(set) var phase: Phase = .idle
     private(set) var hotkeyActive = false
-    /// Words the user fixed right after a paste, offered for the dictionary.
-    private(set) var inbox = SuggestionInbox()
     /// Audio files transcribe one at a time, outside the dictation queue.
     private var fileQueue: Task<Void, Never>?
     /// Progress (0 to 1) of audio files being transcribed, by history entry id. Absent while queued.
@@ -215,8 +213,6 @@ final class AppController {
         history.retrySave()
         history.retryRetention()
     }
-
-    var suggestions: [DictionaryEntry] { inbox.pending }
 
     func copy(_ entry: HistoryEntry) {
         guard let text = entry.text else { return }
@@ -608,10 +604,12 @@ final class AppController {
         case let .pasted(field):
             show(warning.map { .message($0, isError: true) } ?? .done)
             watchForCorrection(of: text, in: field)
-        case .leftOnClipboard:
+        case let .leftOnClipboard(field):
             // Many editors cannot expose an exact AX readback after a successful paste. Dismiss
             // routine feedback without claiming verified insertion; the clipboard remains available.
             show(warning.map { .message($0, isError: true) })
+            // Electron editors often confirm the paste late but still show it when the field is read again.
+            if let field { watchForCorrection(of: text, in: field) }
         case .noTarget:
             show(.message("No text field to paste into. \(Self.copiedHint)", isError: false))
         case .targetChanged:
@@ -622,32 +620,27 @@ final class AppController {
         }
     }
 
-    // MARK: - Dictionary suggestions
+    // MARK: - Learning fixed words
 
-    /// Reads the field again every 2 s for 30 s, while it keeps focus and until the next dictation,
-    /// and offers a word the user fixed as a dictionary entry.
+    /// Reads the field again every 2 s for a minute, while it keeps focus and until the next dictation,
+    /// and saves a word the user fixed to the dictionary.
     private func watchForCorrection(of pasted: String, in field: WatchedField) {
         correctionWatch?.cancel()
         correctionWatch = Task { [weak self] in
             guard let edit = await field.edit(of: pasted),
                   let entry = CorrectionDetector.suggestion(pasted: pasted, before: edit.before, after: edit.after)
             else { return }
-            self?.suggest(entry)
+            self?.learn(entry)
         }
     }
 
-    private func suggest(_ entry: DictionaryEntry) {
-        guard inbox.offer(entry, dictionary: settings.dictionary) else { return }
-        show(.message("Add “\(entry.term)” to your dictionary? It's in Parlo's menu", isError: false))
-    }
-
-    func acceptSuggestion(_ entry: DictionaryEntry) {
-        inbox.remove(entry)
-        settings.dictionary.append(entry)
-    }
-
-    func dismissSuggestion(_ entry: DictionaryEntry) {
-        inbox.dismiss(entry)
+    private func learn(_ entry: DictionaryEntry) {
+        switch DictionaryLearner.learn(entry, into: &settings.dictionary) {
+        case let .added(term), let .extended(term):
+            show(.message("Learned “\(term)”. Edit it in Settings › Dictionary", isError: false))
+        case .known:
+            break
+        }
     }
 
     // MARK: - Windows
