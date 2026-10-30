@@ -722,12 +722,139 @@ private struct DictionaryTab: View {
                     .disabled(term.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+            NotesImportSection(controller: controller)
         }
         .formStyle(.grouped)
     }
 
     static func split(_ s: String) -> [String] {
         s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+}
+
+/// Picks the names and terms a folder of Markdown notes keeps using (an Obsidian vault, say) into the dictionary.
+private struct NotesImportSection: View {
+    let controller: AppController
+    @State private var scanning = false
+    @State private var found: FoundTerms?
+
+    var body: some View {
+        Section {
+            HStack {
+                Text("Parlo reads the Markdown files in a folder and suggests the names and terms you use most. Nothing leaves your Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if scanning {
+                    ProgressView().controlSize(.small)
+                    Text("Reading notes…").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Button("Choose Folder…", action: chooseFolder)
+                }
+            }
+        } header: {
+            Text("Learn from your notes")
+        }
+        .sheet(item: $found) { result in
+            NotesImportSheet(candidates: result.candidates) { picked in
+                var dictionary = controller.settings.dictionary
+                for term in picked { _ = DictionaryLearner.learn(DictionaryEntry(term: term), into: &dictionary) }
+                controller.settings.dictionary = dictionary
+                found = nil
+            }
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.message = "Choose a folder of Markdown notes"
+        panel.prompt = "Scan"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        scanning = true
+        let dictionary = controller.settings.dictionary
+        let languages = Self.spellingLanguages(dictation: controller.settings.languageCode)
+        Task {
+            let candidates = await Task.detached(priority: .userInitiated) {
+                NotesVocabulary.candidates(in: folder, excluding: dictionary) { word in
+                    DispatchQueue.main.sync { MainActor.assumeIsolated { Self.isKnownWord(word, in: languages) } }
+                }
+            }.value
+            scanning = false
+            found = FoundTerms(candidates: candidates)
+        }
+    }
+
+    /// The spell checker's languages for English, the dictation language and the user's languages.
+    private static func spellingLanguages(dictation: String?) -> [String] {
+        let wanted = Set((["en"] + [dictation].compactMap { $0 } + Locale.preferredLanguages).map { String($0.prefix(2)) })
+        return NSSpellChecker.shared.availableLanguages.filter { wanted.contains(String($0.prefix(2))) }
+    }
+
+    @MainActor private static func isKnownWord(_ word: String, in languages: [String]) -> Bool {
+        languages.contains { language in
+            NSSpellChecker.shared.checkSpelling(
+                of: word, startingAt: 0, language: language, wrap: false, inSpellDocumentWithTag: 0, wordCount: nil
+            ).location == NSNotFound
+        }
+    }
+}
+
+private struct FoundTerms: Identifiable {
+    let id = UUID()
+    let candidates: [NotesVocabulary.Candidate]
+}
+
+private struct NotesImportSheet: View {
+    let candidates: [NotesVocabulary.Candidate]
+    let add: ([String]) -> Void
+    @State private var picked: Set<String>
+    @Environment(\.dismiss) private var dismiss
+
+    init(candidates: [NotesVocabulary.Candidate], add: @escaping ([String]) -> Void) {
+        self.candidates = candidates
+        self.add = add
+        _picked = State(initialValue: Set(candidates.map(\.term)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if candidates.isEmpty {
+                Text("No new names or terms found. Parlo looks for words written with capitals in at least three notes.")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Text("Untick anything Parlo already writes right. Fewer, rarer words work best.")
+                    .font(.caption).foregroundStyle(.secondary)
+                List(candidates, id: \.term) { candidate in
+                    Toggle(isOn: Binding(
+                        get: { picked.contains(candidate.term) },
+                        set: { if $0 { picked.insert(candidate.term) } else { picked.remove(candidate.term) } }
+                    )) {
+                        HStack {
+                            Text(candidate.term)
+                            Spacer()
+                            Text("\(candidate.notes) notes").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            HStack {
+                Button(picked.isEmpty ? "Select All" : "Select None") {
+                    picked = picked.isEmpty ? Set(candidates.map(\.term)) : []
+                }
+                .disabled(candidates.isEmpty)
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add \(picked.count) Words") {
+                    add(candidates.map(\.term).filter(picked.contains))
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(picked.isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 440, height: 520)
     }
 }
 
