@@ -31,8 +31,8 @@ targets:
       properties:
         CFBundleName: Parlo
         CFBundleDisplayName: Parlo
-        CFBundleShortVersionString: "0.1.2"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.1.3"
+        CFBundleVersion: "4"
         LSUIElement: true
         SUFeedURL: https://github.com/mariomile/parlo/releases/latest/download/appcast.xml
         SUPublicEDKey: eWrB5z9EMnfG9OcP0l7SYoqU6No7Z94dNsJWKK0Yfss=
