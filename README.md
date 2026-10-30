@@ -124,3 +124,7 @@ python3 scripts/tests/test_hotkey_monitor.py  # tap recovery and idle release po
 - `App/`: the macOS app (menu bar, HUD, hotkey, recording, paste, settings UI).
 - `ParloKit/Sources/ParloCore`: pure logic (settings, prompts, dictionary, snippets, pipelines, model manager, LLM client). Unit-tested.
 - `ParloKit/Sources/ParloEngines`: transcription backends (Apple Speech, FluidAudio, WhisperKit).
+
+## License
+
+[MIT](LICENSE). The models Parlo downloads (Parakeet, Whisper, Qwen, Cohere, Nemotron) keep their own licenses.
