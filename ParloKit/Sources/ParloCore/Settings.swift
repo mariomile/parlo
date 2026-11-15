@@ -99,6 +99,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var hasCompletedOnboarding: Bool
     /// Core Audio UID of the chosen input device; nil follows the system default.
     public var microphoneUID: String?
+    /// Serves `LocalAPI` on 127.0.0.1 so other apps on this Mac (Exo in Obsidian) can transcribe. Off by default.
+    public var localAPIEnabled: Bool
 
     public static let `default` = AppSettings(
         activeModelID: .appleSpeech,
@@ -108,12 +110,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
         dictionary: [],
         snippets: [],
         hasCompletedOnboarding: false,
-        microphoneUID: nil
+        microphoneUID: nil,
+        localAPIEnabled: false
     )
 
     public init(
         activeModelID: ModelID, languageCode: String?, llm: LLMSettings, styleOverrides: [String: Style],
-        dictionary: [DictionaryEntry], snippets: [Snippet], hasCompletedOnboarding: Bool, microphoneUID: String? = nil
+        dictionary: [DictionaryEntry], snippets: [Snippet], hasCompletedOnboarding: Bool, microphoneUID: String? = nil,
+        localAPIEnabled: Bool = false
     ) {
         self.activeModelID = activeModelID
         self.languageCode = languageCode
@@ -123,6 +127,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.snippets = snippets
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.microphoneUID = microphoneUID
+        self.localAPIEnabled = localAPIEnabled
     }
 
     /// Each value decodes on its own: a wrong or unknown one falls back to its default and a malformed
@@ -142,6 +147,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hasCompletedOnboarding = (try? c.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding))
             ?? d.hasCompletedOnboarding
         microphoneUID = try? c.decodeIfPresent(String.self, forKey: .microphoneUID)
+        localAPIEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .localAPIEnabled)) ?? d.localAPIEnabled
     }
 }
 

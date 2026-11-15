@@ -88,6 +88,17 @@ Settings → AI (or **AI Cleanup** in the menu bar): turn it on and pick a provi
 
 Parlo checks the destination immediately before sending ⌘V. It restores the previous clipboard only when Accessibility confirms the expected text was inserted. Otherwise the text stays available so a delayed or manual paste can still read it. When the destination changes or nothing that takes text has focus (the desktop, a button, a list), Parlo keeps the text available for manual paste. A transcription that hangs is stopped after 30 s plus the length of the recording, and the audio stays in Recent for Retry.
 
+## Local transcription for other apps
+
+Settings → General → **Local transcription for other apps** (off by default) serves Parlo's engine on `http://127.0.0.1:47821`, loopback only. Exo, the Obsidian plugin, uses it for dictation in its chat. The format is OpenAI's, so any client written for it works:
+
+```sh
+curl -s http://127.0.0.1:47821/v1/audio/transcriptions -F file=@note.wav -F language=it
+# {"text":"..."}
+```
+
+The audio runs through the same job as a dictation: active model, dictionary, spoken layout, snippets and AI cleanup. Any format macOS can read is accepted. Requests from web pages (an `Origin` other than Obsidian's) are refused. `GET /health` answers `{"status":"ok"}`.
+
 ## Data
 
 Settings, styles, dictionary and snippets: `~/Library/Application Support/Parlo/settings.json`. History: `~/Library/Application Support/Parlo/History`. Meetings: `~/Library/Application Support/Parlo/Meetings`. Nothing leaves the Mac except the text sent to the AI provider you configure.
