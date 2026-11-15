@@ -41,7 +41,7 @@ actor Qwen3ASRTranscriber: Transcriber {
         }
         // Qwen3-ASR reads the system turn as context. Labelled terms there make it write most of them, though not
         // always with the same capitals ("Claude.md" for "CLAUDE.md"); a bare list worked less often.
-        let terms = dictionary.terms
+        let terms = dictionary.promptTerms
         let context = terms.isEmpty ? "" : "Vocabulary: " + terms.joined(separator: ", ")
         let budget = Self.tokenBudget(sampleCount: samples.count)
         // mlx-audio-swift 0.1.6 checks cancellation between streamed tokens/chunks and cancels its

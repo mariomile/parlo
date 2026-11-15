@@ -41,4 +41,14 @@ extension [DictionaryEntry] {
     public var terms: [String] {
         map { $0.term.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
+
+    /// Most terms handed to a speech model as prompt text. A long list makes such a model write dictionary
+    /// words where nobody said them (Whisper repeats its prompt, Qwen copies its context).
+    public static var maxPromptTerms: Int { 40 }
+
+    /// The terms for engines that take them as prompt text: the newest `maxPromptTerms`, since the latest
+    /// entries are the ones the user just taught.
+    public var promptTerms: [String] {
+        Array(terms.suffix(Self.maxPromptTerms))
+    }
 }

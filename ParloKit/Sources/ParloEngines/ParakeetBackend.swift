@@ -64,6 +64,16 @@ actor ParakeetTranscriber: Transcriber {
             ?? result.text
     }
 
+    /// FluidAudio's defaults let a term replace a word on acoustic evidence alone, at zero string similarity,
+    /// and give short terms the full boost: dictionary words then show up in sentences that don't contain
+    /// them (FluidAudio #702). A similarity floor on the rescue and a taper on the boost of short terms keep
+    /// the recovery of mangled names, and stop the rest.
+    static let rescorerConfig = VocabularyRescorer.Config(
+        shortTermCbwTaperPivot: 5,
+        spotterRescueMinSimilarity: 0.30,
+        spotterRescueMultiWordMinSimilarity: 0.50
+    )
+
     /// Nil when the dictionary is empty or the CTC model can't load: boosting never blocks a dictation.
     private func boostingSession(for dictionary: [DictionaryEntry]) async -> VocabularyBoostingSession? {
         refreshCtcState()
@@ -81,7 +91,7 @@ actor ParakeetTranscriber: Transcriber {
         }
         let generation = ctcGeneration
         guard let boosting = try? await VocabularyBoostingSession(
-            vocabulary: CustomVocabularyContext(terms: terms), ctcModels: models
+            vocabulary: CustomVocabularyContext(terms: terms), ctcModels: models, config: Self.rescorerConfig
         ) else { return nil }
         refreshCtcState()
         guard generation == ctcGeneration, ctcModels != nil else { return nil }
