@@ -63,7 +63,7 @@ actor WhisperKitTranscriber: Transcriber {
         options.detectLanguage = languageCode == nil
         options.skipSpecialTokens = true
         options.withoutTimestamps = true
-        let terms = dictionary.terms
+        let terms = dictionary.promptTerms
         if !terms.isEmpty, let tokenizer = kit.tokenizer {
             options.promptTokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
                 .filter { $0 < tokenizer.specialTokens.specialTokenBegin }

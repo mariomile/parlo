@@ -32,6 +32,26 @@ import Testing
         #expect(!p.contains("Parlo →"))
     }
 
+    @Test func dictionaryNeverForcesTermsIn() {
+        let p = PromptBuilder.cleanupSystemPrompt(
+            style: .neutral,
+            dictionary: [DictionaryEntry(term: "CLAUDE.md", heardAs: ["cloud MD"]), DictionaryEntry(term: "Parlo")],
+            hasPlaceholders: false
+        )
+        #expect(!p.contains("sounds like"))
+        #expect(p.contains("never add a term the speaker did not say"))
+        #expect(p.contains("never insert one that was not said"))
+    }
+
+    @Test func promptTermsKeepTheNewestOnly() {
+        let dictionary = (1...100).map { DictionaryEntry(term: "Term\($0)") }
+        let terms = dictionary.promptTerms
+        #expect(terms.count == [DictionaryEntry].maxPromptTerms)
+        #expect(terms.first == "Term61")
+        #expect(terms.last == "Term100")
+        #expect(Array(dictionary.prefix(3)).promptTerms == ["Term1", "Term2", "Term3"])
+    }
+
     @Test func transcriptIsWrappedInTags() {
         #expect(PromptBuilder.cleanupUserMessage("ciao") == "<transcript>ciao</transcript>")
         let p = PromptBuilder.cleanupSystemPrompt(style: .neutral, dictionary: [], hasPlaceholders: false)

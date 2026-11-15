@@ -45,14 +45,19 @@ public enum PromptBuilder {
         }
         if !pairs.isEmpty {
             parts.append("""
-            Dictionary of terms the speech recognizer often mishears, as "heard as → correct term". \
-            Whenever the transcript contains the text on the left, or something that sounds like it, write the term on the right exactly:
+            Dictionary of terms the speech recognizer sometimes mishears, as "heard as → correct term". \
+            When the transcript contains the text on the left and, in context, the speaker clearly meant the term, write the term on the right exactly. \
+            Never replace an ordinary word with a term because it looks or sounds similar, and never add a term the speaker did not say. \
+            When in doubt, keep the transcript as it is:
             \(pairs.map { "- " + $0 }.joined(separator: "\n"))
             """)
         }
         let plain = dictionary.filter { $0.heardAs.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } }.terms
         if !plain.isEmpty {
-            parts.append("Spell these terms exactly as written: \(plain.joined(separator: ", ")).")
+            parts.append(
+                "Spell these terms exactly as written: \(plain.joined(separator: ", ")). "
+                    + "This only fixes how they are written when the speaker said them: never insert one that was not said."
+            )
         }
         if hasPlaceholders {
             parts.append("The transcript contains placeholders like ⟦S1⟧. Keep every placeholder exactly once, unchanged, in its position.")
