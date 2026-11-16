@@ -68,6 +68,11 @@ private struct GeneralTab: View {
             Section("Startup") {
                 LoginItemToggle()
             }
+            Section {
+                Toggle("Local transcription for other apps", isOn: $controller.settings.localAPIEnabled)
+            } footer: {
+                Text("Lets apps on this Mac, such as Exo in Obsidian, send audio to Parlo and get the text back, with your model, dictionary and AI cleanup. Listens on 127.0.0.1:\(String(LocalAPI.port)) only; nothing on the network can reach it.")
+            }
             UpdatesSection(updater: controller.updater)
             Section("Permissions") {
                 PermissionStatus(title: "Microphone", granted: Permissions.microphone, pane: .microphone)

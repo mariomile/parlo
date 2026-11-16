@@ -20,6 +20,7 @@ final class AppController {
                 hud.show(.message(settingsProblem!, isError: true))
             }
             localLLM.inUse = settings.llm.usesLocalModel
+            if settings.localAPIEnabled != oldValue.localAPIEnabled { localAPIServer?.setEnabled(settings.localAPIEnabled) }
         }
     }
     /// The key saved for the current base URL's server. Cached so the keychain is read once per server.
@@ -64,6 +65,8 @@ final class AppController {
     /// A disk-full/permission failure during quit must not discard the only remaining samples.
     private var unsavedTerminationRecordings: [(entryID: String, recording: RecordingSession.Finished)] = []
     private var isTerminating = false
+    /// Local transcription for other apps (Exo); created at launch, listening only while the setting is on.
+    @ObservationIgnored private var localAPIServer: LocalAPIServer?
 
     /// The settings file could not be read at launch and was moved aside.
     private let settingsWereReset: Bool
@@ -131,6 +134,11 @@ final class AppController {
             if !settings.hasCompletedOnboarding { await installRecommendedModel() }
         }
         loadSpeechDetector()
+        localAPIServer = LocalAPIServer { [weak self] audio, filename, language in
+            guard let self else { throw CancellationError() }
+            return try await transcribeForLocalAPI(audio, filename: filename, language: language)
+        }
+        localAPIServer?.setEnabled(settings.localAPIEnabled)
         localLLM.inUse = settings.llm.usesLocalModel
         Task { await localLLM.files.refresh() }
         if !settings.hasCompletedOnboarding || !Permissions.allGranted { showOnboarding() }
@@ -414,6 +422,27 @@ final class AppController {
             return
         }
         queueFile(history.addFile(url, duration: duration), url)
+    }
+
+    /// Audio sent by another app through `LocalAPI`: the same job as a dictation (active model, dictionary,
+    /// spoken layout, snippets, AI cleanup in Obsidian's style), returned instead of pasted. "" = nothing heard.
+    func transcribeForLocalAPI(_ audio: Data, filename: String, language: String?) async throws -> String {
+        let ext = URL(filePath: filename).pathExtension
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "parlo-api-\(UUID().uuidString).\(ext.isEmpty ? "wav" : ext)")
+        try audio.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples = try await AudioFileDecoder.decode(url)
+        var jobSettings = settings
+        if let language { jobSettings.languageCode = language }
+        var job = TranscriptionJob(
+            transcriber: BackgroundTranscriber(gate: gate), llm: llm, settings: jobSettings, speech: speechDetector
+        )
+        job.transcriptionDeadline = nil
+        switch try await job.run(samples, .dictation(bundleID: "md.obsidian")) {
+        case let .text(text, _): return text
+        case .discarded, .empty: return ""
+        }
     }
 
     /// Files go one after another, a minute of audio at a time, and a dictation made meanwhile is
