@@ -38,11 +38,11 @@ final class LocalAPIServer {
                 Task { @MainActor in
                     guard let self else { return }
                     if case let .failed(error) = state {
-                        problem = "Local transcription couldn't start on port \(LocalAPI.port): \(error.localizedDescription)"
+                        self.problem = "Local transcription couldn't start on port \(LocalAPI.port): \(error.localizedDescription)"
                         self.listener?.cancel()
                         self.listener = nil
                     } else if case .ready = state {
-                        problem = nil
+                        self.problem = nil
                     }
                 }
             }
@@ -73,11 +73,11 @@ final class LocalAPIServer {
                 switch LocalAPI.frame(data) {
                 case .incomplete:
                     if isComplete || error != nil { return connection.cancel() }
-                    receive(connection, buffer: data)
+                    self.receive(connection, buffer: data)
                 case let .invalid(status, message):
-                    send(LocalAPI.error(status: status, message), on: connection)
+                    self.send(LocalAPI.error(status: status, message), on: connection)
                 case let .request(request):
-                    await respond(to: request, on: connection)
+                    await self.respond(to: request, on: connection)
                 }
             }
         }
